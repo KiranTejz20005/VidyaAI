@@ -793,7 +793,7 @@ export default function AssignmentDetailPage({ params }: { params: Promise<{ id:
                       <p className="text-xs text-emerald-800">
                         Submitted on{' '}
                         {new Date(
-                          assignment.studentSubmission.submittedAt || assignment.studentSubmission.createdAt || Date.now()
+                          assignment.studentSubmission.submittedAt || assignment.studentSubmission.createdAt || 0
                         ).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}{' '}
                         • Type: <strong>{assignment.studentSubmission.fileType}</strong>
                       </p>

@@ -1,4 +1,4 @@
-import { OcrResultData, OcrQuestion } from './graderTypes';
+import { OcrResultData } from './graderTypes';
 
 export const sampleBiologyOcrResult: OcrResultData = {
   rawOcrText: `DELHI PUBLIC SCHOOL, BOKARO STEEL CITY

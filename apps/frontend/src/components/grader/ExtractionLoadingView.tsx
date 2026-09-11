@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Sparkles, Check, AlertCircle, RefreshCw, ArrowLeft } from 'lucide-react';
+import { Check, AlertCircle, RefreshCw, ArrowLeft } from 'lucide-react';
 
 interface ExtractionLoadingViewProps {
   onComplete?: () => void;
