@@ -17,7 +17,6 @@ import {
 import { useAuthStore } from '@/store/auth.store';
 import { useTutorStore } from '@/store/tutor.store';
 import { useTutorSocket } from '@/hooks/useTutorSocket';
-import { Card } from '@/design-system/Card';
 import { Button } from '@/design-system/Button';
 import { LoadingState } from '@/design-system/LoadingState';
 import { ErrorState } from '@/design-system/ErrorState';
