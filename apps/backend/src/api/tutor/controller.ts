@@ -40,8 +40,35 @@ export const listSessions = async (req: Request, res: Response): Promise<void> =
   sendSuccess(res, { data: sessions.map(serializeSession) });
 };
 
+async function resolveSessionId(sessionId: string, userId: string, orgId?: string | null): Promise<string> {
+  if (sessionId !== 'default') return sessionId;
+
+  let session = await prisma.tutorSession.findFirst({
+    where: { studentId: userId, status: 'ACTIVE' },
+    orderBy: { updatedAt: 'desc' },
+  });
+
+  if (!session) {
+    session = await prisma.tutorSession.create({
+      data: {
+        studentId: userId,
+        subject: 'General Study',
+        tutorMode: 'SOCRATIC',
+        organizationId: orgId || null,
+        status: 'ACTIVE',
+      },
+    });
+  }
+
+  return session.id;
+}
+
 export const getSession = async (req: Request, res: Response): Promise<void> => {
-  const { sessionId } = req.params;
+  const userId = getRequestUserId(req);
+  const orgId = getRequestOrgId(req);
+  let { sessionId } = req.params;
+
+  sessionId = await resolveSessionId(sessionId, userId, orgId);
 
   const session = await prisma.tutorSession.findUnique({
     where: { id: sessionId },
@@ -57,10 +84,12 @@ export const getSession = async (req: Request, res: Response): Promise<void> => 
 };
 
 export const sendMessage = async (req: Request, res: Response): Promise<void> => {
-  const { sessionId } = req.params;
+  let { sessionId } = req.params;
   const userId = getRequestUserId(req);
   const orgId = getRequestOrgId(req);
   const { message, mode } = req.body;
+
+  sessionId = await resolveSessionId(sessionId, userId, orgId);
 
   const result = await AITutorService.chat(sessionId, userId, orgId!, message, mode);
 
@@ -68,7 +97,10 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
 };
 
 export const closeSession = async (req: Request, res: Response): Promise<void> => {
-  const { sessionId } = req.params;
+  let { sessionId } = req.params;
+  const userId = getRequestUserId(req);
+  const orgId = getRequestOrgId(req);
+  sessionId = await resolveSessionId(sessionId, userId, orgId);
 
   await prisma.tutorSession.update({
     where: { id: sessionId },
@@ -79,7 +111,10 @@ export const closeSession = async (req: Request, res: Response): Promise<void> =
 };
 
 export const restartSession = async (req: Request, res: Response): Promise<void> => {
-  const { sessionId } = req.params;
+  let { sessionId } = req.params;
+  const userId = getRequestUserId(req);
+  const orgId = getRequestOrgId(req);
+  sessionId = await resolveSessionId(sessionId, userId, orgId);
 
   await prisma.tutorSession.update({
     where: { id: sessionId },
@@ -90,8 +125,10 @@ export const restartSession = async (req: Request, res: Response): Promise<void>
 };
 
 export const generateFlashcards = async (req: Request, res: Response): Promise<void> => {
-  const { sessionId } = req.params;
+  let { sessionId } = req.params;
   const userId = getRequestUserId(req);
+  const orgId = getRequestOrgId(req);
+  sessionId = await resolveSessionId(sessionId, userId, orgId);
 
   const session = await prisma.tutorSession.findUnique({
     where: { id: sessionId },
@@ -147,7 +184,10 @@ Output your response ONLY as a JSON object matching this schema:
 };
 
 export const deleteSession = async (req: Request, res: Response): Promise<void> => {
-  const { sessionId } = req.params;
+  let { sessionId } = req.params;
+  const userId = getRequestUserId(req);
+  const orgId = getRequestOrgId(req);
+  sessionId = await resolveSessionId(sessionId, userId, orgId);
 
   await prisma.tutorMessage.deleteMany({ where: { sessionId } });
   await prisma.tutorSession.delete({ where: { id: sessionId } });

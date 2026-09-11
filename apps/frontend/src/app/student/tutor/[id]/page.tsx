@@ -105,13 +105,16 @@ export default function TutorChatPage() {
       const data = await getSession(id);
       setSession(data);
       setMessages(data.messages || []);
+      if (id === 'default' && data.id && data.id !== 'default') {
+        router.replace(`/student/tutor/${data.id}`);
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to load tutor session');
       toast.error('Could not load session');
     } finally {
       setIsLoading(false);
     }
-  }, [id]);
+  }, [id, router]);
 
   useEffect(() => {
     if (user) {
