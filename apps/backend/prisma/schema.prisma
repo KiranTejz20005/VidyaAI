@@ -1000,6 +1000,7 @@ model SubmissionEvaluation {
   totalMarks      Float
   generalFeedback String
   criteriaGrades  Json
+  answerRegions   Json?
   teacherOverride Json?
   isOverridden    Boolean           @default(false)
   overrideReason  String?           @db.Text

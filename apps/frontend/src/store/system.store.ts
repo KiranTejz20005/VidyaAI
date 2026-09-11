@@ -30,6 +30,7 @@ export const useSystemStore = create<SystemStore>((set, get) => ({
 
   fetchSettings: async () => {
     if (get().loading) return;
+    if (get().initialized && get().settings) return;
     set({ loading: true });
     try {
       const { isAuthenticated, user } = useAuthStore.getState();

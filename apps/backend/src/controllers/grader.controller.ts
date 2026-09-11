@@ -10,6 +10,7 @@ import {
 } from '../security/assignment-access';
 import { requireRequestOrgId, getRequestUserId } from '../security/request-context';
 import { getPaper } from '../services/paper.service';
+import { logger } from '../utils/logger';
 
 export const saveGradingConfig = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -51,10 +52,11 @@ export const uploadQuestionPaper = async (req: Request, res: Response): Promise<
     }
 
     const questionPaperText = await extractTextFromFile(file.path, file.mimetype);
+    const relativeQpPath = `/uploads/${file.filename}`;
     const config = await prisma.assignmentGradingConfig.upsert({
       where: { assignmentId },
-      create: { assignmentId, questionPaperPath: file.path, questionPaperName: file.originalname, questionPaperType: file.mimetype, questionPaperText },
-      update: { questionPaperPath: file.path, questionPaperName: file.originalname, questionPaperType: file.mimetype, questionPaperText },
+      create: { assignmentId, questionPaperPath: relativeQpPath, questionPaperName: file.originalname, questionPaperType: file.mimetype, questionPaperText },
+      update: { questionPaperPath: relativeQpPath, questionPaperName: file.originalname, questionPaperType: file.mimetype, questionPaperText },
     });
     res.status(201).json({ success: true, data: config });
   } catch (err) {
@@ -218,16 +220,28 @@ export const listSubmissions = async (req: Request, res: Response): Promise<void
     const userMap = new Map(users.map((u) => [u.id, u]));
     const submissionsWithUsers = submissions.map((sub) => {
       const user = userMap.get(sub.studentId);
+      let fileUrl = '';
+      if (typeof sub.fileUrl === 'string' && sub.fileUrl.trim()) {
+        const trimmed = sub.fileUrl.trim();
+        if (/^https?:\/\//i.test(trimmed)) {
+          fileUrl = trimmed;
+        } else {
+          const filename = path.basename(trimmed.replace(/\\/g, '/'));
+          fileUrl = filename ? `/uploads/${filename}` : trimmed;
+        }
+      }
       return {
         ...sub,
+        fileUrl,
         studentName: user ? `${user.firstName} ${user.lastName}`.trim() : sub.studentId,
       };
     });
 
     res.json({ success: true, data: submissionsWithUsers });
   } catch (err) {
+    logger.error(err, '[Grader:listSubmissions] failed');
     if (handleAccessError(res, err)) return;
-    res.status(500).json({ success: false, error: 'Failed to list submissions' });
+    res.status(500).json({ success: false, error: err instanceof Error ? err.message : 'Failed to list submissions' });
   }
 };
 
@@ -249,13 +263,13 @@ export const uploadSubmission = async (req: Request, res: Response): Promise<voi
     const canEvaluate = Boolean(config && (config.answerKeyText.trim() || config.questionPaperText?.trim() || generatedPaper));
     const uploaded = [];
     for (const file of files) {
-      // A stable filename-derived identity lets a corrected scan replace a previous upload.
       const stem = path.basename(file.originalname, path.extname(file.originalname)).trim().toLowerCase();
       const studentId = `uploaded:${stem || file.filename}`;
+      const relativeFileUrl = `/uploads/${file.filename}`;
       const submission = await prisma.studentSubmission.upsert({
         where: { assignmentId_studentId: { assignmentId, studentId } },
-        create: { assignmentId, studentId, organizationId: orgId, fileUrl: file.path, fileType: file.mimetype, status: 'SUBMITTED' },
-        update: { fileUrl: file.path, fileType: file.mimetype, status: 'SUBMITTED', submittedAt: new Date() },
+        create: { assignmentId, studentId, organizationId: orgId, fileUrl: relativeFileUrl, fileType: file.mimetype, status: 'SUBMITTED' },
+        update: { fileUrl: relativeFileUrl, fileType: file.mimetype, status: 'SUBMITTED', submittedAt: new Date() },
       });
       if (config?.autoEvaluate && canEvaluate) {
         try {

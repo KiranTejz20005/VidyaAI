@@ -250,14 +250,15 @@ function createApp() {
 
   app.use(helmet({
     crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
         styleSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", 'data:', 'blob:'],
-        fontSrc: ["'self'", 'data:'],
-        connectSrc: ["'self'", 'ws:', 'wss:'],
+        imgSrc: ["'self'", 'data:', 'blob:', 'https:', 'http:'],
+        fontSrc: ["'self'", 'data:', 'https:'],
+        connectSrc: ["'self'", 'ws:', 'wss:', 'http:', 'https:'],
         objectSrc: ["'none'"],
         frameAncestors: ["'none'"],
       },
@@ -310,9 +311,16 @@ function createApp() {
   app.use('/api', limiter);
 
   const uploadsDir = path.resolve(process.cwd(), 'uploads');
-  app.use('/uploads', express.static(uploadsDir));
-  app.use('/api/uploads', express.static(uploadsDir));
-  app.use('/api/v1/uploads', express.static(uploadsDir));
+  const staticUploadsOptions = {
+    setHeaders: (res: express.Response) => {
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+    },
+  };
+  app.use('/uploads', express.static(uploadsDir, staticUploadsOptions));
+  app.use('/api/uploads', express.static(uploadsDir, staticUploadsOptions));
+  app.use('/api/v1/uploads', express.static(uploadsDir, staticUploadsOptions));
 
   app.use('/api', apiRouter);
 

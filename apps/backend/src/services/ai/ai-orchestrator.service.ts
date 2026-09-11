@@ -71,8 +71,12 @@ export class AIOrchestrator {
 
       // 4. Determine provider evaluation order (filter out unconfigured providers, allow in test environment)
       const isTestEnv = env.NODE_ENV === 'test';
+      const requiresVision = Boolean(options.media?.length);
       const configuredProviders = Object.entries(this.providers)
-        .filter(([_, p]) => (isTestEnv ? true : (p.isConfigured ? p.isConfigured() : true)))
+        .filter(([_, p]) =>
+          (isTestEnv ? true : (p.isConfigured ? p.isConfigured() : true)) &&
+          (!requiresVision || p.supportsVision())
+        )
         .map(([name]) => name);
 
       const orderedProviders = [

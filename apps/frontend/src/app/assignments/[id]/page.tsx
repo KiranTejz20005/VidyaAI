@@ -82,7 +82,7 @@ export default function AssignmentDetailPage({ params }: { params: Promise<{ id:
   const [downloading, setDownloading] = useState(false);
 
   // Student specific submission state
-  const [submissionMode, setSubmissionMode] = useState<'ONLINE' | 'UPLOAD'>('ONLINE');
+  const [submissionMode, setSubmissionMode] = useState<'ONLINE' | 'UPLOAD'>('UPLOAD');
   const [studentAnswers, setStudentAnswers] = useState<Record<string, string>>({});
   const [submissionFile, setSubmissionFile] = useState<File | null>(null);
   const [isSubmittingTest, setIsSubmittingTest] = useState(false);
@@ -383,6 +383,7 @@ export default function AssignmentDetailPage({ params }: { params: Promise<{ id:
   }
 
   const currentStep = getWorkflowStep(assignment.status);
+  const isSubmittedOrGraded = !!assignment.studentSubmission && ['SUBMITTED', 'GRADED'].includes(assignment.studentSubmission.status);
 
   return (
     <>
@@ -696,7 +697,7 @@ export default function AssignmentDetailPage({ params }: { params: Promise<{ id:
                                           <button
                                             key={opt.key}
                                             type="button"
-                                            disabled={!isStudent || !!assignment.studentSubmission}
+                                            disabled={!isStudent || isSubmittedOrGraded || submissionMode === 'UPLOAD'}
                                             onClick={() => updateAnswer(qKey, opt.key)}
                                             className={`p-3 rounded-xl border text-left text-xs font-medium transition-all flex items-center gap-3 ${
                                               isSelected
@@ -721,7 +722,7 @@ export default function AssignmentDetailPage({ params }: { params: Promise<{ id:
                                   )}
 
                                   {/* Student Online Answer Box */}
-                                  {isStudent && !assignment.studentSubmission && (
+                                  {isStudent && !isSubmittedOrGraded && submissionMode === 'ONLINE' && (
                                     <div className="pt-2">
                                       {q.type === 'mcq' ? (
                                         <div className="text-[11px] text-neutral-400 flex items-center gap-1 font-medium">
@@ -771,7 +772,7 @@ export default function AssignmentDetailPage({ params }: { params: Promise<{ id:
                       Submit your completed test answers online or upload handwritten/scanned documents
                     </p>
                   </div>
-                  {assignment.studentSubmission ? (
+                  {isSubmittedOrGraded ? (
                     <span className="px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-bold border border-emerald-200 flex items-center gap-1.5">
                       <CheckCircle2 className="w-3.5 h-3.5" /> Submitted
                     </span>
@@ -782,7 +783,7 @@ export default function AssignmentDetailPage({ params }: { params: Promise<{ id:
                   )}
                 </div>
 
-                {assignment.studentSubmission ? (
+                {isSubmittedOrGraded && assignment.studentSubmission ? (
                   <div className="p-6 rounded-2xl bg-emerald-50/60 border border-emerald-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
                     <div className="space-y-1.5">
                       <div className="flex items-center gap-2 text-emerald-900 font-bold text-sm">
@@ -792,7 +793,7 @@ export default function AssignmentDetailPage({ params }: { params: Promise<{ id:
                       <p className="text-xs text-emerald-800">
                         Submitted on{' '}
                         {new Date(
-                          assignment.studentSubmission.submittedAt || assignment.studentSubmission.createdAt
+                          assignment.studentSubmission.submittedAt || assignment.studentSubmission.createdAt || Date.now()
                         ).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}{' '}
                         • Type: <strong>{assignment.studentSubmission.fileType}</strong>
                       </p>
@@ -856,11 +857,11 @@ export default function AssignmentDetailPage({ params }: { params: Promise<{ id:
                             Upload your handwritten answer sheets or typed solution file
                           </p>
                           <p className="text-[11px] text-neutral-400 mt-0.5 mb-4">
-                            PDF, Word (.docx), or Text files up to 25MB accepted
+                            Images (.png, .jpg), PDF, or Word files up to 25MB accepted
                           </p>
                           <input
                             type="file"
-                            accept=".pdf,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                            accept=".pdf,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*,.png,.jpg,.jpeg"
                             onChange={(e) => setSubmissionFile(e.target.files?.[0] || null)}
                             className="text-xs text-neutral-600 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-neutral-900 file:text-white hover:file:bg-neutral-800 cursor-pointer"
                           />

@@ -1,0 +1,350 @@
+import React, { useRef, useEffect, useState } from 'react';
+import { AssessmentData, QuestionItem } from './graderTypes';
+import { Layers, Sparkles, AlertTriangle } from 'lucide-react';
+
+interface HandwrittenSheetRendererProps {
+  assessment: AssessmentData;
+  currentPage: number;
+  selectedQuestionId: string | null;
+  onSelectQuestion: (questionId: string) => void;
+  onNavigatePage?: (page: number) => void;
+  scale: number;
+  highlightEnabled: boolean;
+}
+
+export const HandwrittenSheetRenderer: React.FC<HandwrittenSheetRendererProps> = ({
+  assessment,
+  currentPage,
+  selectedQuestionId,
+  onSelectQuestion,
+  onNavigatePage,
+  scale,
+  highlightEnabled,
+}) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const activeAnswerBlockRef = useRef<HTMLDivElement>(null);
+  const [previewFailed, setPreviewFailed] = useState(false);
+
+  // Determine current page object (if custom image exists)
+  const currentPageData = assessment.pages.find((p) => p.pageNumber === currentPage);
+  const hasCustomPageImage = Boolean(currentPageData?.imageUrl);
+  const isPdfPreview = /\.pdf(?:$|[?#])/i.test(currentPageData?.imageUrl || '');
+
+  useEffect(() => {
+    setPreviewFailed(false);
+  }, [currentPageData?.imageUrl, currentPage]);
+
+  // Smoothly scroll to the active answer block on the sheet when question selection or page changes
+  useEffect(() => {
+    if (activeAnswerBlockRef.current) {
+      activeAnswerBlockRef.current.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      });
+    }
+  }, [selectedQuestionId, currentPage]);
+
+  const selectedQuestion = assessment.questions.find((q) => q.id === selectedQuestionId);
+
+  // Check if selected question spans multiple pages
+  const selectedSpansMultiple =
+    selectedQuestion?.answerRegion?.spansMultiplePages ||
+    Boolean(selectedQuestion?.answerRegion?.additionalRegions?.length);
+
+  // Collect all page numbers for selected question
+  const selectedQuestionPages: number[] = [];
+  if (selectedQuestion?.answerRegion?.page) {
+    selectedQuestionPages.push(selectedQuestion.answerRegion.page);
+  }
+  if (selectedQuestion?.answerRegion?.additionalRegions) {
+    selectedQuestion.answerRegion.additionalRegions.forEach((reg) => {
+      if (!selectedQuestionPages.includes(reg.page)) {
+        selectedQuestionPages.push(reg.page);
+      }
+    });
+  }
+
+  // Questions allocated to this page
+  // Fallback: If questions don't have explicit answerRegion.page, paginate 3 questions per page
+  const questionsOnThisPage = assessment.questions.filter((q, idx) => {
+    if (q.answerRegion?.page) {
+      return q.answerRegion.page === currentPage;
+    }
+    const derivedPage = Math.floor(idx / 3) + 1;
+    return derivedPage === currentPage;
+  });
+
+  // Additional continuation segments on this page
+  const continuationSegmentsOnThisPage = assessment.questions
+    .map((q) => {
+      const matchingRegion = q.answerRegion?.additionalRegions?.find((r) => r.page === currentPage);
+      if (matchingRegion) {
+        return { question: q, region: matchingRegion };
+      }
+      return null;
+    })
+    .filter(Boolean) as { question: QuestionItem; region: any }[];
+
+  // Unmatched answers on this page
+  const unmatchedOnThisPage = (assessment.unmatchedAnswers || []).filter(
+    (u) => u.page === currentPage || (!u.page && currentPage === 1)
+  );
+
+  // Helper component to render an interactive question answer container
+  const AnswerBlock: React.FC<{
+    key?: React.Key;
+    questionId: string;
+    badgeLabel: string;
+    marksAwarded?: number;
+    maxMarks?: number;
+    isContinuation?: boolean;
+    status?: 'answered' | 'unanswered' | 'partial' | 'unmatched';
+    children: React.ReactNode;
+  }> = ({
+    questionId,
+    badgeLabel,
+    marksAwarded,
+    maxMarks,
+    isContinuation = false,
+    status,
+    children,
+  }) => {
+    const isSelected = selectedQuestionId === questionId;
+
+    return (
+      <div
+        id={`answer-box-${questionId}${isContinuation ? '-cont' : ''}`}
+        ref={isSelected ? activeAnswerBlockRef : null}
+        onClick={(e) => {
+          e.stopPropagation();
+          onSelectQuestion(questionId);
+        }}
+        className={`relative my-4 p-3.5 rounded-2xl transition-all duration-200 cursor-pointer select-text ${
+          highlightEnabled
+            ? isSelected
+              ? 'border-2 border-emerald-500 bg-emerald-500/10 shadow-lg ring-4 ring-emerald-500/20 animate-box-glow z-10'
+              : isContinuation
+              ? 'border border-dashed border-indigo-400/80 bg-indigo-50/20 hover:border-indigo-500 hover:bg-indigo-50/40'
+              : status === 'unanswered'
+              ? 'border border-dashed border-neutral-300 bg-neutral-100/40 opacity-70 hover:opacity-100'
+              : 'border border-dashed border-emerald-400/70 bg-emerald-50/15 hover:border-emerald-500 hover:bg-emerald-50/35'
+            : 'border border-transparent hover:bg-black/[0.02]'
+        }`}
+      >
+        {/* Floating Top Badge */}
+        {highlightEnabled && (
+          <div
+            className={`absolute -top-3 left-3 px-2.5 py-0.5 rounded-md text-[11px] font-extrabold uppercase tracking-wide flex items-center gap-1.5 shadow-xs select-none pointer-events-none z-20 ${
+              isSelected
+                ? 'bg-emerald-600 text-white ring-1 ring-emerald-700'
+                : isContinuation
+                ? 'bg-indigo-600 text-white'
+                : status === 'unanswered'
+                ? 'bg-neutral-500 text-white'
+                : 'bg-emerald-600/90 text-white'
+            }`}
+          >
+            {isSelected && <Sparkles className="w-3 h-3 text-amber-300 shrink-0" />}
+            <span>{badgeLabel}</span>
+            {marksAwarded !== undefined && maxMarks !== undefined && (
+              <span className="bg-white/20 text-white px-1 py-0.2 rounded text-[10px] font-mono">
+                {marksAwarded}/{maxMarks}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Answer Content */}
+        <div className="pt-1 text-blue-950 font-handwriting">{children}</div>
+      </div>
+    );
+  };
+
+  return (
+    <div
+      ref={containerRef}
+      className="relative w-full transition-transform duration-150 origin-top flex flex-col items-center py-2 select-none"
+      style={{
+        transform: `scale(${scale / 100})`,
+        transformOrigin: 'top center',
+      }}
+    >
+      {/* Multi-page answer banner for selected question */}
+      {selectedSpansMultiple && selectedQuestionPages.length > 1 && (
+        <div className="w-full max-w-[700px] mb-3 p-2.5 rounded-xl bg-indigo-900 text-white shadow-sm border border-indigo-700 flex items-center justify-between font-sans text-xs animate-fadeIn">
+          <div className="flex items-center gap-2 min-w-0">
+            <Layers className="w-4 h-4 text-indigo-300 shrink-0" />
+            <div className="truncate">
+              <span className="font-bold">Multi-Page Answer ({selectedQuestion?.number}): </span>
+              <span className="text-indigo-200 text-[11px] truncate">
+                {selectedQuestion?.answerRegion?.continuationNote ||
+                  `Spans across ${selectedQuestionPages.map((p) => `Page ${p}`).join(' & ')}`}
+              </span>
+            </div>
+          </div>
+          {onNavigatePage && (
+            <div className="flex items-center gap-1.5 shrink-0 ml-3">
+              {selectedQuestionPages.map((p) => (
+                <button
+                  key={p}
+                  onClick={() => onNavigatePage(p)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                    currentPage === p
+                      ? 'bg-white text-indigo-950 shadow-xs ring-1 ring-indigo-300'
+                      : 'bg-indigo-800 text-indigo-200 hover:bg-indigo-700 hover:text-white'
+                  }`}
+                >
+                  {currentPage === p ? `Viewing Page ${p}` : `Go to Page ${p}`}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Answer Sheet Canvas Container */}
+      <div
+        id={`answer-sheet-page-${currentPage}`}
+        className="relative w-full max-w-[700px] min-h-[880px] bg-[#faf8f5] shadow-xl rounded-sm border border-neutral-300 overflow-hidden font-handwriting text-neutral-800"
+        style={{
+          backgroundImage: hasCustomPageImage
+            ? undefined
+            : `
+            linear-gradient(90deg, transparent 58px, #f87171 58px, #f87171 60px, transparent 60px),
+            linear-gradient(#e2e8f0 1px, transparent 1px)
+          `,
+          backgroundSize: hasCustomPageImage ? undefined : '100% 100%, 100% 28px',
+          lineHeight: '28px',
+        }}
+      >
+        {/* Paper Header / Student Meta Strip */}
+        <div className="pt-2.5 px-4 pb-1.5 border-b border-neutral-200/80 bg-amber-50/60 text-neutral-600 text-[11px] font-sans flex items-center justify-between z-10 relative">
+          <div className="flex items-center gap-3">
+            <span><strong>Name:</strong> {assessment.studentName || 'Student'}</span>
+            <span><strong>Roll:</strong> {assessment.rollNumber || '01'}</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span><strong>Subject:</strong> {assessment.subject || 'Assessment'}</span>
+            <span className="font-bold text-neutral-900 bg-neutral-200/80 px-2 py-0.5 rounded text-[10px]">
+              Page {currentPage} of {Math.max(assessment.pages.length, 1)}
+            </span>
+          </div>
+        </div>
+
+        {/* CUSTOM IMAGE MODE (If real document image was uploaded) */}
+        {hasCustomPageImage && currentPageData?.imageUrl ? (
+          <div className="relative w-full bg-white overflow-hidden">
+            {isPdfPreview ? (
+              <iframe
+                src={`${currentPageData.imageUrl}#page=${currentPage}&view=FitH`}
+                title={`Submitted answer sheet, page ${currentPage}`}
+                className="w-full h-[760px] border-0 block bg-white"
+              />
+            ) : !previewFailed ? (
+              <img
+                key={`${currentPageData.imageUrl}-${currentPage}`}
+                src={currentPageData.imageUrl}
+                alt={`Submitted answer sheet, page ${currentPage}`}
+                className="w-full h-auto block select-none"
+                loading="eager"
+                crossOrigin="anonymous"
+                onError={(e) => {
+                  const target = e.currentTarget;
+                  // If loading directly from relative /uploads failed, retry with backend host
+                  if (target.src.includes('/uploads/') && !target.src.includes(':3001')) {
+                    target.src = target.src.replace(window.location.origin, 'http://localhost:3001');
+                  } else if (target.src.includes(':3001/uploads/')) {
+                    target.src = target.src.replace('http://localhost:3001', window.location.origin);
+                  } else {
+                    setPreviewFailed(true);
+                  }
+                }}
+              />
+            ) : (
+              <div className="min-h-[760px] flex flex-col items-center justify-center gap-3 p-8 text-center font-sans">
+                <AlertTriangle className="w-8 h-8 text-amber-500" />
+                <p className="text-sm font-bold text-neutral-800">The submitted answer sheet could not be loaded.</p>
+                <a href={currentPageData.imageUrl} target="_blank" rel="noreferrer" className="text-xs font-semibold text-orange-700 hover:underline">Open the uploaded file</a>
+              </div>
+            )}
+
+            {/* Interactive Bounding Box Overlays */}
+            {highlightEnabled &&
+              questionsOnThisPage.map((q) => {
+                const region = q.answerRegion;
+                if (!region) return null;
+                const isSelected = selectedQuestionId === q.id;
+                const statusClasses =
+                  q.status === 'unanswered'
+                    ? isSelected
+                      ? 'border-2 border-rose-500 bg-rose-500/16 shadow-lg ring-4 ring-rose-500/25 z-20'
+                      : 'border border-dashed border-rose-300/70 bg-transparent hover:border-rose-500 hover:bg-rose-400/8 z-10'
+                    : q.status === 'partial'
+                    ? isSelected
+                      ? 'border-2 border-amber-500 bg-amber-400/18 shadow-lg ring-4 ring-amber-500/25 z-20'
+                      : 'border border-dashed border-amber-300/75 bg-transparent hover:border-amber-500 hover:bg-amber-400/8 z-10'
+                    : q.status === 'unmatched'
+                    ? isSelected
+                      ? 'border-2 border-sky-500 bg-sky-400/16 shadow-lg ring-4 ring-sky-500/25 z-20'
+                      : 'border border-dashed border-sky-300/75 bg-transparent hover:border-sky-500 hover:bg-sky-400/8 z-10'
+                    : isSelected
+                    ? 'border-2 border-emerald-500 bg-emerald-500/20 shadow-lg ring-4 ring-emerald-500/30 z-20'
+                    : 'border border-dashed border-emerald-300/75 bg-transparent hover:border-emerald-500 hover:bg-emerald-400/8 z-10';
+                const badgeClasses =
+                  q.status === 'unanswered'
+                    ? 'bg-rose-600 text-white'
+                    : q.status === 'partial'
+                    ? 'bg-amber-600 text-white'
+                    : q.status === 'unmatched'
+                    ? 'bg-sky-600 text-white'
+                    : 'bg-emerald-600 text-white';
+
+                return (
+                  <div
+                    key={q.id}
+                    ref={isSelected ? activeAnswerBlockRef : null}
+                    title={q.aiFeedback}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Highlight answer for question ${q.number}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSelectQuestion(q.id);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onSelectQuestion(q.id);
+                      }
+                    }}
+                    style={{
+                      top: `${Math.max(0, Math.min(99, region.topPercent))}%`,
+                      left: `${Math.max(0, Math.min(99, region.leftPercent))}%`,
+                      width: `${Math.max(2, Math.min(100 - region.leftPercent, region.widthPercent))}%`,
+                      height: `${Math.max(1.2, Math.min(100 - region.topPercent, region.heightPercent))}%`,
+                    }}
+                    className={`absolute rounded-lg transition-all cursor-pointer ${statusClasses}`}
+                  >
+                    <div
+                      className={`absolute -top-3 left-2 px-2 py-0.5 rounded text-[10px] font-extrabold uppercase tracking-wide flex items-center gap-1 shadow-xs font-sans pointer-events-none ${badgeClasses}`}
+                    >
+                      <span>{q.number || `Q${q.mainNumber}`}</span>
+                      <span className="bg-white/20 text-white px-1 rounded text-[9px] font-mono">
+                        {q.marksAwarded}/{q.maxMarks}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
+        ) : (
+          <div className="min-h-[760px] flex flex-col items-center justify-center gap-3 p-8 text-center font-sans">
+            <AlertTriangle className="w-8 h-8 text-amber-500" />
+            <p className="text-sm font-bold text-neutral-800">No student answer sheet is available to preview.</p>
+            <p className="text-xs text-neutral-500 max-w-sm">Upload or select a student submission before opening the grading workspace.</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};

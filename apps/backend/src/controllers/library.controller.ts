@@ -182,7 +182,7 @@ export const uploadResource = async (req: Request, res: Response): Promise<void>
       update: {
         sizeBytes: buffer.length,
       },
-    }).catch((err) => {
+    }).catch((err: any) => {
       logger.warn(`[uploadResource] StoredFile metadata creation warning: ${err.message}`);
     });
 

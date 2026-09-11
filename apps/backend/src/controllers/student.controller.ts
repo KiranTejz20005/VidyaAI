@@ -461,8 +461,17 @@ export const submitAssessment = async (req: Request, res: Response): Promise<voi
     let fileType = 'ONLINE_SUBMISSION';
 
     if (files && files.length > 0) {
-      fileUrl = files[0].path;
-      fileType = files[0].mimetype === 'application/pdf' ? 'PDF' : files[0].mimetype?.includes('word') ? 'DOCX' : 'TXT';
+      fileUrl = `/uploads/${files[0].filename}`;
+      const mime = files[0].mimetype || '';
+      if (mime.startsWith('image/')) {
+        fileType = mime;
+      } else if (mime === 'application/pdf') {
+        fileType = 'PDF';
+      } else if (mime.includes('word') || mime.includes('officedocument')) {
+        fileType = 'DOCX';
+      } else {
+        fileType = 'TXT';
+      }
     } else if (req.body.answers || req.body.text || req.body.content || req.body.answersJson) {
       const answersData = req.body.answers || req.body.text || req.body.content || req.body.answersJson;
       const submissionsDir = path.join(process.cwd(), 'uploads', 'submissions');

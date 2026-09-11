@@ -278,6 +278,7 @@ export function StudentSidebar() {
                     <Link
                       key={label}
                       href={href}
+                      prefetch={true}
                       onClick={close}
                       title={isCollapsed ? label : undefined}
                       className={`flex items-center rounded-xl text-xs font-medium transition-all group ${

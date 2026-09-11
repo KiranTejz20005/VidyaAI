@@ -14,7 +14,7 @@ const securityHeaders = [
       "default-src 'self'",
       "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://accounts.google.com https://apis.google.com",
       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-      "img-src 'self' data: https: blob:",
+      "img-src 'self' data: https: blob: http: http://localhost:* http://127.0.0.1:*",
       "font-src 'self' data: https://fonts.gstatic.com https://fonts.googleapis.com",
       "connect-src 'self' https: wss: http://localhost:* ws://localhost:* https://apis.google.com",
       "frame-src 'self' https://accounts.google.com",
@@ -31,6 +31,24 @@ const nextConfig: NextConfig = {
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL ?? DEFAULT_BACKEND,
     NEXT_PUBLIC_SOCKET_URL:
       process.env.NEXT_PUBLIC_SOCKET_URL ?? process.env.NEXT_PUBLIC_API_URL ?? DEFAULT_BACKEND,
+  },
+  async rewrites() {
+    const backendOrigin = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
+    const cleanOrigin = backendOrigin.replace(/\/api(?:\/v\d+)?\/?$/, "").replace(/\/+$/, "");
+    return [
+      {
+        source: "/uploads/:path*",
+        destination: `${cleanOrigin}/uploads/:path*`,
+      },
+      {
+        source: "/api/uploads/:path*",
+        destination: `${cleanOrigin}/uploads/:path*`,
+      },
+      {
+        source: "/api/v1/uploads/:path*",
+        destination: `${cleanOrigin}/uploads/:path*`,
+      },
+    ];
   },
   async headers() {
     return [

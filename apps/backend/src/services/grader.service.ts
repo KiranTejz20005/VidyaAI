@@ -7,13 +7,21 @@ import { logger } from '../utils/logger';
 import { retrieveContext } from './rag.service';
 import { invalidateCache } from '../api/common/cache';
 import { getPaper } from './paper.service';
-
 import { extractTextFromFileBuffer } from './document-extractor.service';
+import { mapAnswerRegions } from './answer-region-mapper.service';
 
 export async function extractTextFromFile(filePath: string, fileType: string): Promise<string> {
   try {
-    const buffer = await fs.readFile(filePath);
-    const filename = path.basename(filePath);
+    if (!filePath || typeof filePath !== 'string') return '';
+    let resolvedPath = filePath;
+    if (filePath.startsWith('/uploads/') || filePath.startsWith('uploads/') || filePath.startsWith('\\uploads\\') || filePath.startsWith('uploads\\')) {
+      const rel = filePath.replace(/^[/\\]+/, '');
+      resolvedPath = path.resolve(process.cwd(), rel);
+    } else if (!path.isAbsolute(filePath)) {
+      resolvedPath = path.resolve(process.cwd(), filePath);
+    }
+    const buffer = await fs.readFile(resolvedPath);
+    const filename = path.basename(resolvedPath);
     return await extractTextFromFileBuffer(buffer, filename, fileType);
   } catch (error) {
     logger.error({ error, filePath, fileType }, 'Failed to extract text from file');
@@ -31,14 +39,23 @@ export async function evaluateSubmission(submissionId: string): Promise<any> {
     throw new Error('Submission not found');
   }
 
-  // Get Assignment config
-  const config = await prisma.assignmentGradingConfig.findUnique({
+  // Get Assignment config or auto-create default if missing
+  let config = await prisma.assignmentGradingConfig.findUnique({
     where: { assignmentId: submission.assignmentId },
     include: { rubric: { include: { criteria: true } } },
   });
 
   if (!config) {
-    throw new Error('Grading configuration not found for this assignment');
+    config = await prisma.assignmentGradingConfig.upsert({
+      where: { assignmentId: submission.assignmentId },
+      create: {
+        assignmentId: submission.assignmentId,
+        answerKeyText: '',
+        autoEvaluate: true,
+      },
+      update: {},
+      include: { rubric: { include: { criteria: true } } },
+    });
   }
 
   const studentAnswerText = await extractTextFromFile(submission.fileUrl, submission.fileType);
@@ -67,7 +84,6 @@ export async function evaluateSubmission(submissionId: string): Promise<any> {
       ).join('\n\n')
     : 'No rubric provided. Evaluate overall correctness.';
 
-
   let ragContext = '';
   if (submission.assignment.organizationId) {
     try {
@@ -90,9 +106,13 @@ export async function evaluateSubmission(submissionId: string): Promise<any> {
     'Student Submission:',
     studentAnswerText,
     '',
-    'Task: Evaluate the submission. You MUST return a structured JSON object containing a total score, general feedback, and an array of criteria grades. Each criterion grade must contain the criterion ID, score, and a detailed EXPLAINABLE reason highlighting missing concepts and matched evidence.'
+    'Task: Evaluate the submission. You MUST return a structured JSON object containing:',
+    '- score: total awarded marks.',
+    '- totalMarks: maximum marks used for evaluation.',
+    '- generalFeedback: short overall feedback.',
+    '- questions: one item per question in the question paper. Each item must include questionNumber, score, maxMarks, studentAnswer, correctAnswer, and a detailed reason explaining why the answer is correct, partial, incorrect, or left blank.',
+    '- criteriaGrades: when a rubric is provided, one item per rubric criterion with criterionId, score, and a detailed explanation highlighting missing concepts and matched evidence.'
   ].join('\n');
-
 
   logger.info({ submissionId }, 'AI Assignment Evaluation started');
 
@@ -108,21 +128,40 @@ export async function evaluateSubmission(submissionId: string): Promise<any> {
       ? config.rubric.criteria.reduce((sum, c) => sum + c.maxMarks, 0)
       : submission.assignment.totalMarks;
 
+    const computedScore = Number(data.score ?? data.totalScore ?? data.marks) || 0;
+    const computedQuestionGrades = Array.isArray(data.questions) && data.questions.length > 0
+      ? data.questions
+      : Array.isArray(data.questionGrades) && data.questionGrades.length > 0
+      ? data.questionGrades
+      : [];
+    const computedCriteria = Array.isArray(data.criteriaGrades) && data.criteriaGrades.length > 0
+      ? data.criteriaGrades
+      : computedQuestionGrades;
+    const expectedQuestions = generatedPaperSections
+      .flatMap((section: any) => Array.isArray(section.questions) ? section.questions : [])
+      .map((question: any, index: number) => ({
+        number: String(question.number || index + 1),
+        text: String(question.question || ''),
+        maxMarks: Number(question.marks) || undefined,
+      }));
+
+    const answerRegions = await mapAnswerRegions(submission.fileUrl, submission.fileType, expectedQuestions);
+
     // Save evaluation to database
     const evaluation = await prisma.submissionEvaluation.upsert({
       where: { submissionId },
       create: {
         submissionId,
-        score: Number(data.score) || 0,
+        score: computedScore,
         totalMarks: correctTotalMarks,
-        generalFeedback: data.generalFeedback || '',
-        criteriaGrades: data.criteriaGrades || [],
+        generalFeedback: data.generalFeedback || data.feedback || '',
+        criteriaGrades: computedCriteria,
       },
       update: {
-        score: Number(data.score) || 0,
+        score: computedScore,
         totalMarks: correctTotalMarks,
-        generalFeedback: data.generalFeedback || '',
-        criteriaGrades: data.criteriaGrades || [],
+        generalFeedback: data.generalFeedback || data.feedback || '',
+        criteriaGrades: computedCriteria,
       },
     });
 
@@ -135,7 +174,7 @@ export async function evaluateSubmission(submissionId: string): Promise<any> {
     await invalidateCache(`analytics:student:${submission.studentId}`).catch(() => {});
 
     logger.info({ submissionId, score: evaluation.score }, 'AI Assignment Evaluation completed');
-    return evaluation;
+    return { ...evaluation, questions: computedQuestionGrades, answerRegions };
   } catch (error) {
     logger.error(error, `AI Assignment Evaluation failed for submissionId: ${submissionId}`);
     throw error;
@@ -195,4 +234,3 @@ export async function overrideEvaluation(submissionId: string, payload: Override
 
   return { evaluation: updated, previousScore, newScore };
 }
-
