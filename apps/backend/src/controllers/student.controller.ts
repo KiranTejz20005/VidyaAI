@@ -276,6 +276,30 @@ export const getLessonDetail = async (req: Request, res: Response): Promise<void
       lesson = await (prisma as any).lessonPlan.findFirst({
         where: { id, organizationId: orgId },
       });
+      if (lesson) {
+        let parsedObjectives = lesson.objectives;
+        if (typeof parsedObjectives === 'string') {
+          try {
+            const parsed = JSON.parse(parsedObjectives);
+            parsedObjectives = Array.isArray(parsed) ? parsed : parsedObjectives.split('\n').filter(Boolean);
+          } catch {
+            parsedObjectives = parsedObjectives.split('\n').filter(Boolean);
+          }
+        }
+        let parsedSections = lesson.sections;
+        if (typeof parsedSections === 'string') {
+          try {
+            parsedSections = JSON.parse(parsedSections);
+          } catch {
+            parsedSections = [];
+          }
+        }
+        lesson = {
+          ...lesson,
+          objectives: Array.isArray(parsedObjectives) ? parsedObjectives : [],
+          sections: Array.isArray(parsedSections) ? parsedSections : [],
+        };
+      }
     }
 
     if (!lesson) {

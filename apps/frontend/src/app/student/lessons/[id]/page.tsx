@@ -87,12 +87,73 @@ export default function StudentLessonDetailPage() {
     );
   }
 
-  const sections = lesson.sections || [];
-  const objectives = lesson.objectives || [
-    'Understand fundamental theory and real-world system architecture',
-    'Demonstrate practical analytical reasoning across core questions',
-    'Master Bloom’s cognitive criteria for syllabus examinations',
-  ];
+  const rawObjectives: unknown = lesson.objectives;
+  let objectives: string[] = [];
+
+  if (Array.isArray(rawObjectives)) {
+    objectives = rawObjectives.map(String);
+  } else if (typeof rawObjectives === 'string' && rawObjectives.trim()) {
+    const trimmed = rawObjectives.trim();
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) {
+          objectives = parsed.map(String);
+        } else {
+          objectives = trimmed.split('\n').map((s: string) => s.trim()).filter(Boolean);
+        }
+      } catch {
+        objectives = trimmed.split('\n').map((s: string) => s.trim()).filter(Boolean);
+      }
+    } else {
+      objectives = trimmed.split('\n').map((s: string) => s.trim()).filter(Boolean);
+    }
+  }
+
+  if (objectives.length === 0) {
+    objectives = [
+      'Understand fundamental theory and real-world system architecture',
+      'Demonstrate practical analytical reasoning across core questions',
+      'Master Bloom’s cognitive criteria for syllabus examinations',
+    ];
+  }
+
+  const rawSections: unknown = lesson.sections;
+  let sections: Array<{ title: string; content: string }> = [];
+
+  if (Array.isArray(rawSections)) {
+    sections = rawSections as Array<{ title: string; content: string }>;
+  } else if (typeof rawSections === 'string' && rawSections.trim()) {
+    try {
+      const parsed = JSON.parse(rawSections.trim());
+      if (Array.isArray(parsed)) {
+        sections = parsed;
+      }
+    } catch {
+      sections = [];
+    }
+  }
+
+  if (sections.length === 0) {
+    sections = [
+      {
+        title: '1. Theoretical Overview & Foundations',
+        content:
+          'In this foundational module, we explore the core principles, syntax, and execution lifecycle. Understanding these underlying mechanics ensures solid mastery when designing complex software architectures and scalable data solutions.',
+      },
+      {
+        title: '2. Detailed Analysis & Key Principles',
+        content:
+          'Key principles focus on declarative querying, ACID transactional consistency, indexing strategies (B-Tree, Hash), and relational calculus. By breaking down each phase into modular components, we can systematically analyze and isolate performance bottlenecks.',
+      },
+      {
+        title: '3. Real-World Applications & Case Studies',
+        content:
+          'Industry-standard applications utilize these models across high-throughput distributed databases, microservice event streams, and real-time analytical warehouses. Review the case diagrams and architectural blueprints below.',
+      },
+    ];
+  }
+
   const completedCount = Object.values(completedSections).filter(Boolean).length;
   const progressPct = sections.length > 0 ? Math.round((completedCount / sections.length) * 100) : 0;
 
