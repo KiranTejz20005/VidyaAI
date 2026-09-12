@@ -140,17 +140,37 @@ export async function evaluateSubmission(submissionId: string): Promise<any> {
 
     let expectedQuestions = generatedPaperSections
       .flatMap((section: any) => Array.isArray(section.questions) ? section.questions : [])
-      .map((question: any, index: number) => ({
-        number: String(question.number || index + 1),
-        text: String(question.question || ''),
-        maxMarks: Number(question.marks) || undefined,
-      }));
+      .map((question: any, index: number) => {
+        const marks = Number(question.marks) || undefined;
+        const qText = String(question.question || '');
+        const isMcq =
+          question.type === 'mcq' ||
+          (Array.isArray(question.options) && question.options.length > 0) ||
+          (marks !== undefined && marks <= 1 && /^[a-e]$/i.test(String(question.answer || '').trim())) ||
+          /\b(multiple choice|mcq|choose the correct|select one)\b/i.test(qText);
+
+        return {
+          number: String(question.number || index + 1),
+          text: qText,
+          maxMarks: marks,
+          isMcq,
+          questionType: (isMcq ? 'mcq' : marks && marks > 3 ? 'long' : 'short') as 'mcq' | 'short' | 'long',
+        };
+      });
 
     // Fallback: parse questions from questionPaperText if generatedPaper has no sections
     if (expectedQuestions.length === 0 && config.questionPaperText) {
       const lines = config.questionPaperText.split('\n').map((l: string) => l.trim()).filter(Boolean);
       const qRegex = /^(?:Q(?:uestion)?\s*)?(\d+(?:\s*\([a-z0-9]+\)|\s*[a-z]\b)?)[.:\-)]\s*(.+)/i;
+      let inMcqSection = false;
+
       lines.forEach((line: string) => {
+        if (/multiple\s*choice|mcq/i.test(line)) {
+          inMcqSection = true;
+        } else if (/short\s*answer|long\s*answer|descriptive|section\s*[b-z]/i.test(line)) {
+          inMcqSection = false;
+        }
+
         const match = line.match(qRegex);
         if (match) {
           const number = match[1].trim();
@@ -161,7 +181,16 @@ export async function evaluateSubmission(submissionId: string): Promise<any> {
             marks = Number(marksMatch[1] || marksMatch[2]);
             text = text.replace(marksMatch[0], '').trim();
           }
-          expectedQuestions.push({ number, text, maxMarks: marks });
+
+          const isMcq = inMcqSection || (marks !== undefined && marks <= 1) || /\b(choose|select|multiple choice|mcq)\b/i.test(text);
+
+          expectedQuestions.push({
+            number,
+            text,
+            maxMarks: marks,
+            isMcq,
+            questionType: (isMcq ? 'mcq' : marks && marks > 3 ? 'long' : 'short') as 'mcq' | 'short' | 'long',
+          });
         }
       });
     }

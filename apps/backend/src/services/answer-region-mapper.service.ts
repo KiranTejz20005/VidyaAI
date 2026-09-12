@@ -39,6 +39,8 @@ export interface ExpectedQuestion {
   number: string;
   text: string;
   maxMarks?: number;
+  questionType?: 'mcq' | 'short' | 'long' | 'diagram' | 'numerical';
+  isMcq?: boolean;
 }
 
 export interface MappingResult {
@@ -137,12 +139,25 @@ export async function mapAnswerRegions(
       imageType: 'custom-image',
     }));
 
-    const expected = expectedQuestions.map((q) => ({
+    // Filter out multiple choice questions (MCQs). Only long / descriptive answers should be highlighted.
+    const longQuestions = expectedQuestions.filter((q) => {
+      if (q.isMcq || q.questionType === 'mcq') return false;
+      if (q.maxMarks !== undefined && q.maxMarks <= 1) return false;
+      if (/\b(multiple choice|mcq|choose the correct|select one)\b/i.test(q.text)) return false;
+      return true;
+    });
+
+    if (longQuestions.length === 0) {
+      logger.info('No long/descriptive questions to map; skipping bounding box extraction for MCQs.');
+      return { regions: [], pages };
+    }
+
+    const expected = longQuestions.map((q) => ({
       number: q.number,
       text: q.text.slice(0, 180),
       maxMarks: q.maxMarks,
     }));
-    const expectedNumbers = new Set(expectedQuestions.map((q) => normaliseQuestionNumber(q.number)));
+    const expectedNumbers = new Set(longQuestions.map((q) => normaliseQuestionNumber(q.number)));
 
     const allRegions: AnswerRegionMap[] = [];
 
@@ -158,16 +173,24 @@ export async function mapAnswerRegions(
           responseFormat: { type: 'json_object' },
           media: [{ type: 'image_url', url: `data:${pageItem.mimeType};base64,${pageItem.buffer.toString('base64')}` }],
           taskInstructions: [
-            `You are a document-layout OCR mapper analyzing Page ${pageItem.pageNumber} of a student answer sheet.`,
-            'Locate the handwriting belonging to each expected question on this page. Question numbers may appear as "1)", "1.", "1", "1 (a)", "Q1", or "Ans 1".',
-            'Use the written question-number anchor and the actual handwritten ink only. Do not allocate equal rows, infer space from marks, include blank paper, or include the next answer.',
-            'Treat each MCQ answer as its own compact single-line region. Do not merge an MCQ section heading or neighbouring MCQ rows into one box.',
-            'A multi-line answer must be one tight rectangle around all its lines. If an answer continues in a separate non-touching area or across lines, specify those in additionalRegions.',
-            `All bounding boxes on this image have page: ${pageItem.pageNumber}.`,
-            'Coordinates must be percentages of the full image: x is leftPercent (0-100), y is topPercent (0-100), and width/height are positive (0-100). Add 1% padding around ink.',
-            `Return JSON: {"answerRegions":[{"questionNumber":"1","page":${pageItem.pageNumber},"topPercent":10.5,"leftPercent":8.0,"widthPercent":84.0,"heightPercent":12.5,"confidence":0.95,"additionalRegions":[]}]}`,
-            `Expected questions (only return matches for these): ${JSON.stringify(expected)}`,
-            'Omit any question that is not answered on this page. Never invent a bounding box.',
+            `You are a document-layout OCR mapper analyzing Page ${pageItem.pageNumber} of a student handwritten answer sheet.`,
+            'CRITICAL INSTRUCTION: DO NOT detect, map, or highlight Multiple Choice Questions (MCQs), single-letter answers (e.g. 1) C, 2) A), objective answers, or section headings.',
+            'YOUR EXCLUSIVE TASK: Locate and highlight ONLY the handwritten descriptive / short / long answers with high-accuracy bounding boxes.',
+            '',
+            'For each expected question:',
+            '1. Locate the written question number or anchor written by the student (e.g., "6)", "6.", "Ans 6", "Q6").',
+            '2. Measure the physical bounding box covering the entire answer: start from the top of the question label/heading, extend down to the last line of ink of that answer (before the next question begins or the page ends), and span horizontally across the student\'s handwriting.',
+            '3. Do NOT include other questions, do NOT include section headers (like "Short Answers :"), and do NOT include empty paper or margins.',
+            '4. Coordinates MUST be percentages of the full image (0 to 100):',
+            '   - leftPercent: horizontal start of ink (x)',
+            '   - topPercent: vertical start of the answer ink (y)',
+            '   - widthPercent: horizontal span of the handwriting',
+            '   - heightPercent: vertical span from start of question to end of answer',
+            `5. All bounding boxes on this image have page: ${pageItem.pageNumber}.`,
+            '',
+            `Expected long/descriptive questions to locate: ${JSON.stringify(expected)}`,
+            `Return JSON: {"answerRegions":[{"questionNumber":"6","page":${pageItem.pageNumber},"topPercent":48.0,"leftPercent":6.0,"widthPercent":88.0,"heightPercent":20.0,"confidence":0.95,"additionalRegions":[]}]}`,
+            'Omit any question that is not written on this page. Never create bounding boxes for MCQs.',
           ].join('\n'),
         });
 

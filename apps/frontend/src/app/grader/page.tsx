@@ -453,11 +453,20 @@ export default function GraderDashboard() {
 
         if (paperQuestions.length > 0) {
           const imageAnchoredRegions = isSingleSheet ? indexLayoutRegions(lastEval?.answerRegions) : new Map();
-          mappedQuestions = paperQuestions.map((question) => ({
-            ...question,
-            // Match layout region by normalized question number
-            answerRegion: imageAnchoredRegions.get(normaliseQuestionNumber(question.number)),
-          }));
+          mappedQuestions = paperQuestions.map((question) => {
+            const isMcq = question.questionType === 'mcq' ||
+              (question.maxMarks <= 1 && question.suggestedSolution && /^[A-E]$/i.test(question.suggestedSolution.trim())) ||
+              (question.maxMarks <= 1 && question.studentAnswerText && /^[A-E]$/i.test(question.studentAnswerText.trim())) ||
+              (question.maxMarks <= 1 && question.section && /multiple\s*choice|mcq/i.test(question.section)) ||
+              /\b(multiple choice|mcq|choose the correct|select one)\b/i.test(question.text || '');
+
+            return {
+              ...question,
+              questionType: isMcq ? 'mcq' : question.questionType,
+              // Never attach bounding box highlight for Multiple Choice Questions (MCQs)
+              answerRegion: isMcq ? undefined : imageAnchoredRegions.get(normaliseQuestionNumber(question.number)),
+            };
+          });
           generatedOcrData = {
             rawOcrText: [
               `EXAMINATION / ASSESSMENT: ${selectedAssignment.title.toUpperCase()}`,
@@ -497,6 +506,11 @@ export default function GraderDashboard() {
             ? 'answered'
             : 'partial';
 
+          const isMcq = q.questionType === 'mcq' ||
+            (maxMarks <= 1 && (/^[A-E]$/i.test(String(studentText).trim()) || /^[A-E]$/i.test(String(q.correctAnswer || '').trim()))) ||
+            (maxMarks <= 1 && /^\d+$/.test(qNumberStr) && Number(qNumberStr) <= 5 && /^[A-E]$/i.test(String(studentText).trim())) ||
+            /\b(multiple choice|mcq|choose the correct|select one)\b/i.test(String(q.questionText || q.text || ''));
+
           return {
             id: `q-${idx + 1}`,
             number: qNumberStr,
@@ -506,18 +520,23 @@ export default function GraderDashboard() {
             maxMarks,
             marksAwarded,
             status,
+            questionType: isMcq ? 'mcq' : (maxMarks <= 3 ? 'short' : 'long'),
             aiFeedback: q.reason || q.aiFeedback || q.explanation || 'Evaluated by AI Grader',
             suggestedSolution: q.correctAnswer || q.suggestedSolution,
             studentAnswerText: studentText,
-            answerRegion: imageAnchoredRegions.get(normaliseQuestionNumber(qNumberStr)),
+            // Never attach bounding box highlight for Multiple Choice Questions (MCQs)
+            answerRegion: isMcq ? undefined : imageAnchoredRegions.get(normaliseQuestionNumber(qNumberStr)),
           };
         });
       } else if (selectedStudent?.fileUrl && lastEval?.answerRegions) {
         const imageAnchoredRegions = indexLayoutRegions(lastEval?.answerRegions);
-        mappedQuestions = basePreset.questions.map((q) => ({
-          ...q,
-          answerRegion: imageAnchoredRegions.get(normaliseQuestionNumber(q.number)) || q.answerRegion,
-        }));
+        mappedQuestions = basePreset.questions.map((q) => {
+          const isMcq = q.questionType === 'mcq' || q.maxMarks <= 1;
+          return {
+            ...q,
+            answerRegion: isMcq ? undefined : imageAnchoredRegions.get(normaliseQuestionNumber(q.number)) || q.answerRegion,
+          };
+        });
       }
 
       // Live student answer sheet pages with multi-page support

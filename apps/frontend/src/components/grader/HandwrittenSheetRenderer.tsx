@@ -98,6 +98,15 @@ export const HandwrittenSheetRenderer: React.FC<HandwrittenSheetRendererProps> =
   }> = [];
 
   assessment.questions.forEach((q) => {
+    // Exclude Multiple Choice Questions (MCQs) - only highlight long / descriptive answers
+    const isMcq =
+      q.questionType === 'mcq' ||
+      (q.maxMarks <= 1 && q.suggestedSolution && /^[A-E]$/i.test(q.suggestedSolution.trim())) ||
+      (q.maxMarks <= 1 && q.studentAnswerText && /^[A-E]$/i.test(q.studentAnswerText.trim())) ||
+      (q.maxMarks <= 1 && q.section && /multiple\s*choice|mcq/i.test(q.section)) ||
+      /\b(multiple choice|mcq|choose the correct|select one)\b/i.test(q.text || '');
+    if (isMcq) return;
+
     if (q.answerRegion && q.answerRegion.page === currentPage) {
       pageRegions.push({
         question: q,
@@ -365,14 +374,36 @@ export const HandwrittenSheetRenderer: React.FC<HandwrittenSheetRendererProps> =
                     }}
                     className={`absolute rounded-lg transition-all cursor-pointer ${statusClasses}`}
                   >
+                    {/* Floating Top-Left Badge with Question & Prominent Marks */}
                     <div
-                      className={`absolute -top-3 left-2 px-2 py-0.5 rounded text-[10px] font-extrabold uppercase tracking-wide flex items-center gap-1 shadow-xs font-sans pointer-events-none ${badgeClasses}`}
+                      className={`absolute -top-3.5 left-2 px-2.5 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wide flex items-center gap-1.5 shadow-md font-sans pointer-events-none z-30 ${badgeClasses}`}
                     >
-                      <span>{q.number || `Q${q.mainNumber}`}</span>
+                      <span>Answer {q.number || `Q${q.mainNumber}`}</span>
                       {isContinuation && <span className="opacity-90 font-medium">(Cont.)</span>}
-                      <span className="bg-white/20 text-white px-1 rounded text-[9px] font-mono">
-                        {q.marksAwarded}/{q.maxMarks}
+                      <span className="bg-white/25 text-white px-1.5 py-0.2 rounded text-[10px] font-bold font-mono tracking-tight">
+                        {q.marksAwarded !== undefined ? `${q.marksAwarded} / ${q.maxMarks} Marks` : `${q.maxMarks} Marks`}
                       </span>
+                    </div>
+
+                    {/* Top-Right Score Tag */}
+                    <div
+                      className={`absolute -top-3 right-2 px-2 py-0.5 rounded text-[9px] font-bold shadow-xs font-sans pointer-events-none z-30 ${
+                        q.status === 'answered'
+                          ? 'bg-emerald-700 text-white'
+                          : q.status === 'partial'
+                          ? 'bg-amber-700 text-white'
+                          : q.status === 'incorrect'
+                          ? 'bg-rose-700 text-white'
+                          : 'bg-neutral-600 text-white'
+                      }`}
+                    >
+                      {q.status === 'answered'
+                        ? 'Full Marks'
+                        : q.status === 'partial'
+                        ? `Partial (${q.marksAwarded} M)`
+                        : q.status === 'incorrect'
+                        ? '0 Marks'
+                        : 'Blank'}
                     </div>
                   </div>
                 );
