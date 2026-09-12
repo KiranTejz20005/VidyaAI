@@ -594,7 +594,7 @@ export async function extractTextFromPdf(buffer: Buffer, filename?: string): Pro
 /**
  * Fast embedded JPEG/PNG image stream extractor from raw PDF buffer.
  */
-function extractEmbeddedImagesFromPdfBuffer(buffer: Buffer): Array<{ buffer: Buffer; mimeType: string }> {
+export function extractEmbeddedImagesFromPdfBuffer(buffer: Buffer): Array<{ buffer: Buffer; mimeType: string }> {
   const images: Array<{ buffer: Buffer; mimeType: string }> = [];
 
   // Search for JPEG markers: 0xFF 0xD8 ... 0xFF 0xD9

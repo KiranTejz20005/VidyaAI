@@ -33,6 +33,18 @@ export function serializeSubmission(submission: any): SubmissionDto {
 }
 
 export function serializeEvaluation(evaluation: any): EvaluationDto {
+  const rawAnswerRegions = evaluation.answerRegions;
+  const answerRegions = Array.isArray(rawAnswerRegions)
+    ? rawAnswerRegions
+    : Array.isArray(rawAnswerRegions?.regions)
+    ? rawAnswerRegions.regions
+    : undefined;
+  const questions = Array.isArray(evaluation.questions)
+    ? evaluation.questions
+    : Array.isArray(rawAnswerRegions?.questions)
+    ? rawAnswerRegions.questions
+    : undefined;
+
   return {
     id: evaluation.id,
     submissionId: evaluation.submissionId,
@@ -46,6 +58,8 @@ export function serializeEvaluation(evaluation: any): EvaluationDto {
       maxScore: g.maxScore ?? g.maxMarks ?? 0,
       explanation: g.explanation ?? '',
     })),
+    answerRegions,
+    questions,
     evaluatedAt: evaluation.createdAt?.toISOString() ?? new Date().toISOString(),
     overriddenAt: evaluation.overriddenAt?.toISOString() ?? undefined,
     overrideReason: evaluation.overrideReason ?? undefined,

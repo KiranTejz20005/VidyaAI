@@ -28,7 +28,7 @@ export interface QuestionItem {
   text: string;
   maxMarks: number;
   marksAwarded: number;
-  status: 'answered' | 'unanswered' | 'partial' | 'unmatched';
+  status: 'answered' | 'unanswered' | 'partial' | 'incorrect' | 'unmatched';
   aiFeedback: string;
   suggestedSolution?: string;
   studentAnswerText?: string;

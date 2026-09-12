@@ -51,6 +51,8 @@ export interface EvaluationDto {
   totalMarks: number;
   generalFeedback: string;
   criteriaGrades: CriteriaGradeDto[];
+  answerRegions?: any[];
+  questions?: any[];
   evaluatedAt: string;
   overriddenAt?: string;
   overrideReason?: string;

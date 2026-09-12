@@ -137,7 +137,8 @@ export async function evaluateSubmission(submissionId: string): Promise<any> {
     const computedCriteria = Array.isArray(data.criteriaGrades) && data.criteriaGrades.length > 0
       ? data.criteriaGrades
       : computedQuestionGrades;
-    const expectedQuestions = generatedPaperSections
+
+    let expectedQuestions = generatedPaperSections
       .flatMap((section: any) => Array.isArray(section.questions) ? section.questions : [])
       .map((question: any, index: number) => ({
         number: String(question.number || index + 1),
@@ -145,9 +146,31 @@ export async function evaluateSubmission(submissionId: string): Promise<any> {
         maxMarks: Number(question.marks) || undefined,
       }));
 
-    const answerRegions = await mapAnswerRegions(submission.fileUrl, submission.fileType, expectedQuestions);
+    // Fallback: parse questions from questionPaperText if generatedPaper has no sections
+    if (expectedQuestions.length === 0 && config.questionPaperText) {
+      const lines = config.questionPaperText.split('\n').map((l: string) => l.trim()).filter(Boolean);
+      const qRegex = /^(?:Q(?:uestion)?\s*)?(\d+(?:\s*\([a-z0-9]+\)|\s*[a-z]\b)?)[.:\-)]\s*(.+)/i;
+      lines.forEach((line: string) => {
+        const match = line.match(qRegex);
+        if (match) {
+          const number = match[1].trim();
+          let text = match[2].trim();
+          let marks: number | undefined;
+          const marksMatch = text.match(/\[(\d+)\s*(?:marks?|pts?|m)?\]|\((\d+)\s*(?:marks?|pts?|m)?\)/i);
+          if (marksMatch) {
+            marks = Number(marksMatch[1] || marksMatch[2]);
+            text = text.replace(marksMatch[0], '').trim();
+          }
+          expectedQuestions.push({ number, text, maxMarks: marks });
+        }
+      });
+    }
 
-    // Save evaluation to database
+    const mappingResult = await mapAnswerRegions(submission.fileUrl, submission.fileType, expectedQuestions);
+    const answerRegions = mappingResult.regions;
+    const submissionPages = mappingResult.pages;
+
+    // Save evaluation to database with regions, pages, and question evaluations
     const evaluation = await prisma.submissionEvaluation.upsert({
       where: { submissionId },
       create: {
@@ -156,12 +179,22 @@ export async function evaluateSubmission(submissionId: string): Promise<any> {
         totalMarks: correctTotalMarks,
         generalFeedback: data.generalFeedback || data.feedback || '',
         criteriaGrades: computedCriteria,
+        answerRegions: {
+          regions: answerRegions,
+          pages: submissionPages,
+          questions: computedQuestionGrades,
+        } as any,
       },
       update: {
         score: computedScore,
         totalMarks: correctTotalMarks,
         generalFeedback: data.generalFeedback || data.feedback || '',
         criteriaGrades: computedCriteria,
+        answerRegions: {
+          regions: answerRegions,
+          pages: submissionPages,
+          questions: computedQuestionGrades,
+        } as any,
       },
     });
 
@@ -174,7 +207,12 @@ export async function evaluateSubmission(submissionId: string): Promise<any> {
     await invalidateCache(`analytics:student:${submission.studentId}`).catch(() => {});
 
     logger.info({ submissionId, score: evaluation.score }, 'AI Assignment Evaluation completed');
-    return { ...evaluation, questions: computedQuestionGrades, answerRegions };
+    return {
+      ...evaluation,
+      questions: computedQuestionGrades,
+      answerRegions,
+      pages: submissionPages,
+    };
   } catch (error) {
     logger.error(error, `AI Assignment Evaluation failed for submissionId: ${submissionId}`);
     throw error;

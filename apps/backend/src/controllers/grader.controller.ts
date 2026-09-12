@@ -150,8 +150,26 @@ export const getSubmissionEvaluation = async (req: Request, res: Response): Prom
       include: { rubric: { include: { criteria: true } } },
     });
     const rubricCriteria = config?.rubric?.criteria || [];
-    
-    res.json({ success: true, data: { ...evaluation, studentText, rubricCriteria } });
+    const rawAnswerRegions: any = evaluation?.answerRegions;
+    const answerRegionsList = Array.isArray(rawAnswerRegions)
+      ? rawAnswerRegions
+      : Array.isArray(rawAnswerRegions?.regions)
+      ? rawAnswerRegions.regions
+      : [];
+    const pagesList = Array.isArray(rawAnswerRegions?.pages) ? rawAnswerRegions.pages : [];
+    const questionsList = Array.isArray(rawAnswerRegions?.questions) ? rawAnswerRegions.questions : [];
+
+    res.json({
+      success: true,
+      data: {
+        ...evaluation,
+        answerRegions: answerRegionsList,
+        pages: pagesList,
+        questions: questionsList,
+        studentText,
+        rubricCriteria,
+      },
+    });
   } catch (err) {
     if (handleAccessError(res, err)) return;
     res.status(500).json({ success: false, error: 'Failed to fetch evaluation' });

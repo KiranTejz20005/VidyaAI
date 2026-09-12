@@ -25,7 +25,7 @@ export const HandwrittenSheetRenderer: React.FC<HandwrittenSheetRendererProps> =
   const activeAnswerBlockRef = useRef<HTMLDivElement>(null);
   const [previewFailed, setPreviewFailed] = useState(false);
 
-  // Determine current page object (if custom image exists)
+  // Determine current page object
   const currentPageData = assessment.pages.find((p) => p.pageNumber === currentPage);
   const hasCustomPageImage = Boolean(currentPageData?.imageUrl);
   const isPdfPreview = /\.pdf(?:$|[?#])/i.test(currentPageData?.imageUrl || '');
@@ -64,8 +64,7 @@ export const HandwrittenSheetRenderer: React.FC<HandwrittenSheetRendererProps> =
     });
   }
 
-  // Questions allocated to this page
-  // Fallback: If questions don't have explicit answerRegion.page, paginate 3 questions per page
+  // Questions allocated to this page for notebook canvas mode
   const questionsOnThisPage = assessment.questions.filter((q, idx) => {
     if (q.answerRegion?.page) {
       return q.answerRegion.page === currentPage;
@@ -90,7 +89,38 @@ export const HandwrittenSheetRenderer: React.FC<HandwrittenSheetRendererProps> =
     (u) => u.page === currentPage || (!u.page && currentPage === 1)
   );
 
-  // Helper component to render an interactive question answer container
+  // Collect all bounding box regions on this page (primary + additional continuation regions)
+  const pageRegions: Array<{
+    question: QuestionItem;
+    region: { topPercent: number; leftPercent: number; widthPercent: number; heightPercent: number; label?: string };
+    isContinuation: boolean;
+    key: string;
+  }> = [];
+
+  assessment.questions.forEach((q) => {
+    if (q.answerRegion && q.answerRegion.page === currentPage) {
+      pageRegions.push({
+        question: q,
+        region: q.answerRegion,
+        isContinuation: false,
+        key: `primary-${q.id}`,
+      });
+    }
+    if (q.answerRegion?.additionalRegions) {
+      q.answerRegion.additionalRegions.forEach((addl, idx) => {
+        if (addl.page === currentPage) {
+          pageRegions.push({
+            question: q,
+            region: addl,
+            isContinuation: true,
+            key: `addl-${q.id}-${idx}`,
+          });
+        }
+      });
+    }
+  });
+
+  // Helper component to render an interactive question answer container in notebook mode
   const AnswerBlock: React.FC<{
     key?: React.Key;
     questionId: string;
@@ -98,7 +128,7 @@ export const HandwrittenSheetRenderer: React.FC<HandwrittenSheetRendererProps> =
     marksAwarded?: number;
     maxMarks?: number;
     isContinuation?: boolean;
-    status?: 'answered' | 'unanswered' | 'partial' | 'unmatched';
+    status?: 'answered' | 'unanswered' | 'partial' | 'incorrect' | 'unmatched';
     children: React.ReactNode;
   }> = ({
     questionId,
@@ -125,8 +155,12 @@ export const HandwrittenSheetRenderer: React.FC<HandwrittenSheetRendererProps> =
               ? 'border-2 border-emerald-500 bg-emerald-500/10 shadow-lg ring-4 ring-emerald-500/20 animate-box-glow z-10'
               : isContinuation
               ? 'border border-dashed border-indigo-400/80 bg-indigo-50/20 hover:border-indigo-500 hover:bg-indigo-50/40'
+              : status === 'incorrect'
+              ? 'border border-dashed border-rose-400/80 bg-rose-50/20 hover:border-rose-500 hover:bg-rose-50/35'
               : status === 'unanswered'
               ? 'border border-dashed border-neutral-300 bg-neutral-100/40 opacity-70 hover:opacity-100'
+              : status === 'partial'
+              ? 'border border-dashed border-amber-400/80 bg-amber-50/20 hover:border-amber-500 hover:bg-amber-50/35'
               : 'border border-dashed border-emerald-400/70 bg-emerald-50/15 hover:border-emerald-500 hover:bg-emerald-50/35'
             : 'border border-transparent hover:bg-black/[0.02]'
         }`}
@@ -139,8 +173,12 @@ export const HandwrittenSheetRenderer: React.FC<HandwrittenSheetRendererProps> =
                 ? 'bg-emerald-600 text-white ring-1 ring-emerald-700'
                 : isContinuation
                 ? 'bg-indigo-600 text-white'
+                : status === 'incorrect'
+                ? 'bg-rose-600 text-white'
                 : status === 'unanswered'
                 ? 'bg-neutral-500 text-white'
+                : status === 'partial'
+                ? 'bg-amber-600 text-white'
                 : 'bg-emerald-600/90 text-white'
             }`}
           >
@@ -207,13 +245,13 @@ export const HandwrittenSheetRenderer: React.FC<HandwrittenSheetRendererProps> =
         id={`answer-sheet-page-${currentPage}`}
         className="relative w-full max-w-[700px] min-h-[880px] bg-[#faf8f5] shadow-xl rounded-sm border border-neutral-300 overflow-hidden font-handwriting text-neutral-800"
         style={{
-          backgroundImage: hasCustomPageImage
+          backgroundImage: hasCustomPageImage && !previewFailed
             ? undefined
             : `
             linear-gradient(90deg, transparent 58px, #f87171 58px, #f87171 60px, transparent 60px),
             linear-gradient(#e2e8f0 1px, transparent 1px)
           `,
-          backgroundSize: hasCustomPageImage ? undefined : '100% 100%, 100% 28px',
+          backgroundSize: hasCustomPageImage && !previewFailed ? undefined : '100% 100%, 100% 28px',
           lineHeight: '28px',
         }}
       >
@@ -231,8 +269,8 @@ export const HandwrittenSheetRenderer: React.FC<HandwrittenSheetRendererProps> =
           </div>
         </div>
 
-        {/* CUSTOM IMAGE MODE (If real document image was uploaded) */}
-        {hasCustomPageImage && currentPageData?.imageUrl ? (
+        {/* CUSTOM IMAGE MODE (If real document image was uploaded and loaded) */}
+        {hasCustomPageImage && currentPageData?.imageUrl && !previewFailed ? (
           <div className="relative w-full bg-white overflow-hidden">
             {isPdfPreview ? (
               <iframe
@@ -240,7 +278,7 @@ export const HandwrittenSheetRenderer: React.FC<HandwrittenSheetRendererProps> =
                 title={`Submitted answer sheet, page ${currentPage}`}
                 className="w-full h-[760px] border-0 block bg-white"
               />
-            ) : !previewFailed ? (
+            ) : (
               <img
                 key={`${currentPageData.imageUrl}-${currentPage}`}
                 src={currentPageData.imageUrl}
@@ -250,7 +288,6 @@ export const HandwrittenSheetRenderer: React.FC<HandwrittenSheetRendererProps> =
                 crossOrigin="anonymous"
                 onError={(e) => {
                   const target = e.currentTarget;
-                  // If loading directly from relative /uploads failed, retry with backend host
                   if (target.src.includes('/uploads/') && !target.src.includes(':3001')) {
                     target.src = target.src.replace(window.location.origin, 'http://localhost:3001');
                   } else if (target.src.includes(':3001/uploads/')) {
@@ -260,53 +297,56 @@ export const HandwrittenSheetRenderer: React.FC<HandwrittenSheetRendererProps> =
                   }
                 }}
               />
-            ) : (
-              <div className="min-h-[760px] flex flex-col items-center justify-center gap-3 p-8 text-center font-sans">
-                <AlertTriangle className="w-8 h-8 text-amber-500" />
-                <p className="text-sm font-bold text-neutral-800">The submitted answer sheet could not be loaded.</p>
-                <a href={currentPageData.imageUrl} target="_blank" rel="noreferrer" className="text-xs font-semibold text-orange-700 hover:underline">Open the uploaded file</a>
-              </div>
             )}
 
             {/* Interactive Bounding Box Overlays */}
             {highlightEnabled &&
-              questionsOnThisPage.map((q) => {
-                const region = q.answerRegion;
-                if (!region) return null;
+              pageRegions.map(({ question: q, region, isContinuation, key }) => {
                 const isSelected = selectedQuestionId === q.id;
-                const statusClasses =
-                  q.status === 'unanswered'
-                    ? isSelected
-                      ? 'border-2 border-rose-500 bg-rose-500/16 shadow-lg ring-4 ring-rose-500/25 z-20'
-                      : 'border border-dashed border-rose-300/70 bg-transparent hover:border-rose-500 hover:bg-rose-400/8 z-10'
-                    : q.status === 'partial'
-                    ? isSelected
-                      ? 'border-2 border-amber-500 bg-amber-400/18 shadow-lg ring-4 ring-amber-500/25 z-20'
-                      : 'border border-dashed border-amber-300/75 bg-transparent hover:border-amber-500 hover:bg-amber-400/8 z-10'
-                    : q.status === 'unmatched'
-                    ? isSelected
-                      ? 'border-2 border-sky-500 bg-sky-400/16 shadow-lg ring-4 ring-sky-500/25 z-20'
-                      : 'border border-dashed border-sky-300/75 bg-transparent hover:border-sky-500 hover:bg-sky-400/8 z-10'
-                    : isSelected
-                    ? 'border-2 border-emerald-500 bg-emerald-500/20 shadow-lg ring-4 ring-emerald-500/30 z-20'
-                    : 'border border-dashed border-emerald-300/75 bg-transparent hover:border-emerald-500 hover:bg-emerald-400/8 z-10';
-                const badgeClasses =
-                  q.status === 'unanswered'
-                    ? 'bg-rose-600 text-white'
-                    : q.status === 'partial'
-                    ? 'bg-amber-600 text-white'
-                    : q.status === 'unmatched'
-                    ? 'bg-sky-600 text-white'
-                    : 'bg-emerald-600 text-white';
+                const statusClasses = isContinuation
+                  ? isSelected
+                    ? 'border-2 border-indigo-500 bg-indigo-500/20 shadow-lg ring-4 ring-indigo-500/30 z-20'
+                    : 'border border-dashed border-indigo-400/80 bg-indigo-500/5 hover:border-indigo-500 hover:bg-indigo-400/10 z-10'
+                  : q.status === 'incorrect'
+                  ? isSelected
+                    ? 'border-2 border-rose-500 bg-rose-500/22 shadow-lg ring-4 ring-rose-500/30 z-20'
+                    : 'border border-dashed border-rose-400/80 bg-rose-500/8 hover:border-rose-500 hover:bg-rose-400/15 z-10'
+                  : q.status === 'unanswered'
+                  ? isSelected
+                    ? 'border-2 border-neutral-400 bg-neutral-500/16 shadow-lg ring-4 ring-neutral-400/25 z-20'
+                    : 'border border-dashed border-neutral-300/70 bg-transparent hover:border-neutral-400 hover:bg-neutral-300/10 z-10'
+                  : q.status === 'partial'
+                  ? isSelected
+                    ? 'border-2 border-amber-500 bg-amber-400/18 shadow-lg ring-4 ring-amber-500/25 z-20'
+                    : 'border border-dashed border-amber-400/75 bg-amber-400/5 hover:border-amber-500 hover:bg-amber-400/12 z-10'
+                  : q.status === 'unmatched'
+                  ? isSelected
+                    ? 'border-2 border-sky-500 bg-sky-400/16 shadow-lg ring-4 ring-sky-500/25 z-20'
+                    : 'border border-dashed border-sky-300/75 bg-transparent hover:border-sky-500 hover:bg-sky-400/8 z-10'
+                  : isSelected
+                  ? 'border-2 border-emerald-500 bg-emerald-500/20 shadow-lg ring-4 ring-emerald-500/30 z-20'
+                  : 'border border-dashed border-emerald-400/75 bg-emerald-400/5 hover:border-emerald-500 hover:bg-emerald-400/12 z-10';
+
+                const badgeClasses = isContinuation
+                  ? 'bg-indigo-600 text-white'
+                  : q.status === 'incorrect'
+                  ? 'bg-rose-600 text-white'
+                  : q.status === 'unanswered'
+                  ? 'bg-neutral-500 text-white'
+                  : q.status === 'partial'
+                  ? 'bg-amber-600 text-white'
+                  : q.status === 'unmatched'
+                  ? 'bg-sky-600 text-white'
+                  : 'bg-emerald-600 text-white';
 
                 return (
                   <div
-                    key={q.id}
+                    key={key}
                     ref={isSelected ? activeAnswerBlockRef : null}
-                    title={q.aiFeedback}
+                    title={`${q.number}: ${q.aiFeedback}`}
                     role="button"
                     tabIndex={0}
-                    aria-label={`Highlight answer for question ${q.number}`}
+                    aria-label={`Highlight answer for question ${q.number}${isContinuation ? ' continuation' : ''}`}
                     onClick={(e) => {
                       e.stopPropagation();
                       onSelectQuestion(q.id);
@@ -318,8 +358,8 @@ export const HandwrittenSheetRenderer: React.FC<HandwrittenSheetRendererProps> =
                       }
                     }}
                     style={{
-                      top: `${Math.max(0, Math.min(99, region.topPercent))}%`,
-                      left: `${Math.max(0, Math.min(99, region.leftPercent))}%`,
+                      top: `${Math.max(0, Math.min(98, region.topPercent))}%`,
+                      left: `${Math.max(0, Math.min(98, region.leftPercent))}%`,
                       width: `${Math.max(2, Math.min(100 - region.leftPercent, region.widthPercent))}%`,
                       height: `${Math.max(1.2, Math.min(100 - region.topPercent, region.heightPercent))}%`,
                     }}
@@ -329,6 +369,7 @@ export const HandwrittenSheetRenderer: React.FC<HandwrittenSheetRendererProps> =
                       className={`absolute -top-3 left-2 px-2 py-0.5 rounded text-[10px] font-extrabold uppercase tracking-wide flex items-center gap-1 shadow-xs font-sans pointer-events-none ${badgeClasses}`}
                     >
                       <span>{q.number || `Q${q.mainNumber}`}</span>
+                      {isContinuation && <span className="opacity-90 font-medium">(Cont.)</span>}
                       <span className="bg-white/20 text-white px-1 rounded text-[9px] font-mono">
                         {q.marksAwarded}/{q.maxMarks}
                       </span>
@@ -338,10 +379,85 @@ export const HandwrittenSheetRenderer: React.FC<HandwrittenSheetRendererProps> =
               })}
           </div>
         ) : (
-          <div className="min-h-[760px] flex flex-col items-center justify-center gap-3 p-8 text-center font-sans">
-            <AlertTriangle className="w-8 h-8 text-amber-500" />
-            <p className="text-sm font-bold text-neutral-800">No student answer sheet is available to preview.</p>
-            <p className="text-xs text-neutral-500 max-w-sm">Upload or select a student submission before opening the grading workspace.</p>
+          /* HANDWRITTEN NOTEBOOK CANVAS FALLBACK MODE */
+          <div className="p-6 sm:p-8 min-h-[760px]">
+            {previewFailed && (
+              <div className="mb-4 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-sans flex items-center justify-between">
+                <span>Displaying extracted handwritten notebook canvas mode.</span>
+                {currentPageData?.imageUrl && (
+                  <a
+                    href={currentPageData.imageUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-bold text-orange-700 hover:underline"
+                  >
+                    Open original file
+                  </a>
+                )}
+              </div>
+            )}
+
+            {questionsOnThisPage.length === 0 && continuationSegmentsOnThisPage.length === 0 ? (
+              <div className="py-24 text-center text-neutral-400 font-sans text-xs italic">
+                Blank page — no answers recorded on Page {currentPage}.
+              </div>
+            ) : (
+              <>
+                {questionsOnThisPage.map((q) => (
+                  <AnswerBlock
+                    key={q.id}
+                    questionId={q.id}
+                    badgeLabel={`Answer ${q.number}`}
+                    marksAwarded={q.marksAwarded}
+                    maxMarks={q.maxMarks}
+                    status={q.status}
+                  >
+                    <div className="text-sm leading-[28px] text-blue-950 font-handwriting select-text">
+                      {q.studentAnswerText || (
+                        <span className="text-neutral-400 italic font-sans text-xs">
+                          [Unanswered / Left Blank]
+                        </span>
+                      )}
+                    </div>
+                  </AnswerBlock>
+                ))}
+
+                {continuationSegmentsOnThisPage.map(({ question: q, region }) => (
+                  <AnswerBlock
+                    key={`cont-${q.id}`}
+                    questionId={q.id}
+                    badgeLabel={`Answer ${q.number} (Continuation)`}
+                    marksAwarded={q.marksAwarded}
+                    maxMarks={q.maxMarks}
+                    isContinuation={true}
+                    status={q.status}
+                  >
+                    <div className="text-sm leading-[28px] text-indigo-950 font-handwriting select-text">
+                      {region.segmentTitle || q.answerRegion?.continuationNote || (
+                        <span className="italic">Continued response for Question {q.number}...</span>
+                      )}
+                    </div>
+                  </AnswerBlock>
+                ))}
+
+                {unmatchedOnThisPage.map((u) => (
+                  <div
+                    key={u.id}
+                    className="my-4 p-3.5 rounded-2xl border border-dashed border-sky-400 bg-sky-50/40 text-xs font-sans"
+                  >
+                    <div className="font-bold text-sky-900 flex items-center gap-1.5 mb-1">
+                      <span>{u.label}</span>
+                    </div>
+                    <p className="text-sky-950 font-handwriting text-sm leading-[26px]">
+                      {u.extractedText}
+                    </p>
+                    <p className="text-[11px] text-sky-700 mt-1 italic font-sans">
+                      Note: {u.aiNote}
+                    </p>
+                  </div>
+                ))}
+              </>
+            )}
           </div>
         )}
       </div>

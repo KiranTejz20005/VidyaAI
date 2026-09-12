@@ -49,7 +49,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [zoomLevel, setZoomLevel] = useState<number>(100);
   const [highlightEnabled, setHighlightEnabled] = useState<boolean>(true);
-  const [filterMode, setFilterMode] = useState<'all' | 'answered' | 'unanswered' | 'partial'>('all');
+  const [filterMode, setFilterMode] = useState<'all' | 'answered' | 'partial' | 'incorrect' | 'unanswered'>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [showOcrModal, setShowOcrModal] = useState<boolean>(false);
   const [showReportModal, setShowReportModal] = useState<boolean>(false);
@@ -71,6 +71,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       }
     }
   }, [assessment.id]);
+
+  // Auto-scroll question list into view on the left whenever selectedQuestionId changes
+  useEffect(() => {
+    if (selectedQuestionId && selectedCardRef.current) {
+      selectedCardRef.current.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+      });
+    }
+  }, [selectedQuestionId]);
 
   // Auto-switch right page when selected question changes
   const handleSelectQuestion = (qId: string) => {
@@ -108,12 +118,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   // Filtered list of questions
   const filteredQuestions = assessment.questions.filter((q) => {
-    // "Attempted" includes both fully-correct and partially-correct answers.
-    // Previously the chip count included partial answers while the list hid
-    // them, so a 9-item count could render only 8 cards (for example Q8).
-    if (filterMode === 'answered' && q.status !== 'answered' && q.status !== 'partial') return false;
-    if (filterMode === 'unanswered' && q.status !== 'unanswered') return false;
+    if (filterMode === 'answered' && q.status !== 'answered') return false;
     if (filterMode === 'partial' && q.status !== 'partial') return false;
+    if (filterMode === 'incorrect' && q.status !== 'incorrect') return false;
+    if (filterMode === 'unanswered' && q.status !== 'unanswered') return false;
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
       const matchNum = q.number.toLowerCase().includes(query);
@@ -145,7 +153,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const totalAwarded = assessment.questions.reduce((acc, q) => acc + (q.marksAwarded || 0), 0);
   const totalMax = assessment.questions.reduce((acc, q) => acc + (q.maxMarks || 0), 0);
   const scorePercentage = totalMax ? Math.round((totalAwarded / totalMax) * 100) : 0;
-  const answeredCount = assessment.questions.filter((q) => q.status === 'answered' || q.status === 'partial').length;
+  const answeredCount = assessment.questions.filter((q) => q.status === 'answered').length;
+  const partialCount = assessment.questions.filter((q) => q.status === 'partial').length;
+  const incorrectCount = assessment.questions.filter((q) => q.status === 'incorrect').length;
   const unansweredCount = assessment.questions.filter((q) => q.status === 'unanswered').length;
 
   // Handle manual teacher mark update
@@ -156,7 +166,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         return {
           ...q,
           marksAwarded: clamped,
-          status: clamped === 0 ? ('unanswered' as const) : clamped === q.maxMarks ? ('answered' as const) : ('partial' as const),
+          status: clamped === 0
+            ? (q.studentAnswerText ? ('incorrect' as const) : ('unanswered' as const))
+            : clamped >= q.maxMarks
+            ? ('answered' as const)
+            : ('partial' as const),
         };
       }
       return q;
@@ -303,7 +317,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
 
             {/* Filter mode chips */}
-            <div className="flex items-center gap-1 shrink-0">
+            <div className="flex items-center gap-1 shrink-0 overflow-x-auto py-0.5 max-w-full">
               <button
                 onClick={() => setFilterMode('all')}
                 className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors shrink-0 whitespace-nowrap cursor-pointer ${
@@ -322,17 +336,37 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     : 'text-emerald-700 hover:bg-emerald-50'
                 }`}
               >
-                Attempted ({answeredCount})
+                Correct ({answeredCount})
+              </button>
+              <button
+                onClick={() => setFilterMode('partial')}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors shrink-0 whitespace-nowrap cursor-pointer ${
+                  filterMode === 'partial'
+                    ? 'bg-amber-700 text-white'
+                    : 'text-amber-700 hover:bg-amber-50'
+                }`}
+              >
+                Partial ({partialCount})
+              </button>
+              <button
+                onClick={() => setFilterMode('incorrect')}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors shrink-0 whitespace-nowrap cursor-pointer ${
+                  filterMode === 'incorrect'
+                    ? 'bg-rose-700 text-white'
+                    : 'text-rose-700 hover:bg-rose-50'
+                }`}
+              >
+                Incorrect ({incorrectCount})
               </button>
               <button
                 onClick={() => setFilterMode('unanswered')}
                 className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors shrink-0 whitespace-nowrap cursor-pointer ${
                   filterMode === 'unanswered'
-                    ? 'bg-rose-700 text-white'
-                    : 'text-rose-700 hover:bg-rose-50'
+                    ? 'bg-neutral-700 text-white'
+                    : 'text-neutral-600 hover:bg-neutral-200/60'
                 }`}
               >
-                Unanswered ({unansweredCount})
+                Blank ({unansweredCount})
               </button>
             </div>
           </div>
@@ -436,8 +470,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                         {/* Marks badge */}
                         <div
                           className={`px-2.5 py-1 rounded-full text-xs font-extrabold shadow-2xs ${
-                            q.status === 'unanswered'
+                            q.status === 'incorrect'
                               ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                              : q.status === 'unanswered'
+                              ? 'bg-neutral-100 text-neutral-600 border border-neutral-300'
                               : q.marksAwarded === q.maxMarks
                               ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                               : 'bg-amber-50 text-amber-700 border border-amber-200'
@@ -477,8 +513,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                                     ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                                     : q.status === 'partial'
                                     ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                                    : q.status === 'unanswered'
+                                    : q.status === 'incorrect'
                                     ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                    : q.status === 'unanswered'
+                                    ? 'bg-neutral-100 text-neutral-600 border border-neutral-300'
                                     : 'bg-sky-50 text-sky-700 border border-sky-200'
                                 }`}
                               >
@@ -486,6 +524,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                                   ? 'Correct'
                                   : q.status === 'partial'
                                   ? 'Partial'
+                                  : q.status === 'incorrect'
+                                  ? 'Incorrect'
                                   : q.status === 'unanswered'
                                   ? 'Left blank'
                                   : 'Needs review'}
@@ -493,17 +533,47 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                             </div>
 
                             {q.answerRegion && (
-                              <button
-                                onClick={() => {
-                                  if (q.answerRegion?.page) {
-                                    setCurrentPage(q.answerRegion.page);
-                                  }
-                                }}
-                                className="text-[11px] font-semibold text-orange-600 hover:text-orange-700 flex items-center gap-1"
-                              >
-                                <Eye className="w-3 h-3" />
-                                <span>View Page {q.answerRegion.page}</span>
-                              </button>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleSelectQuestion(q.id);
+                                    if (q.answerRegion?.page) {
+                                      setCurrentPage(q.answerRegion.page);
+                                    }
+                                  }}
+                                  className={`text-[11px] font-semibold flex items-center gap-1 px-2 py-0.5 rounded transition-colors cursor-pointer ${
+                                    currentPage === q.answerRegion.page && selectedQuestionId === q.id
+                                      ? 'bg-orange-100 text-orange-800 border border-orange-200'
+                                      : 'text-orange-600 hover:text-orange-700 hover:bg-orange-50'
+                                  }`}
+                                >
+                                  <Eye className="w-3 h-3" />
+                                  <span>View Page {q.answerRegion.page}</span>
+                                </button>
+                                {q.answerRegion.additionalRegions?.map((addl, aIdx) => (
+                                  <button
+                                    key={aIdx}
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleSelectQuestion(q.id);
+                                      if (addl.page) {
+                                        setCurrentPage(addl.page);
+                                      }
+                                    }}
+                                    className={`text-[11px] font-semibold flex items-center gap-1 px-2 py-0.5 rounded transition-colors cursor-pointer ${
+                                      currentPage === addl.page && selectedQuestionId === q.id
+                                        ? 'bg-indigo-100 text-indigo-800 border border-indigo-200'
+                                        : 'text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50'
+                                    }`}
+                                  >
+                                    <Layers className="w-2.5 h-2.5" />
+                                    <span>Cont. Page {addl.page}</span>
+                                  </button>
+                                ))}
+                              </div>
                             )}
                           </div>
 

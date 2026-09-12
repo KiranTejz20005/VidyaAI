@@ -15,7 +15,7 @@ import Link from 'next/link';
 import { AssessmentUploadView } from '@/components/grader/AssessmentUploadView';
 import { DashboardView } from '@/components/grader/GradingDashboardView';
 import { ExtractionLoadingView } from '@/components/grader/ExtractionLoadingView';
-import { AnswerRegion, AssessmentData } from '@/components/grader/graderTypes';
+import { AdditionalAnswerRegion, AnswerRegion, AnswerSheetPage, AssessmentData } from '@/components/grader/graderTypes';
 import { sampleBiologyAssessment, sampleMathematicsAssessment } from '@/components/grader/sampleAssessments';
 import { resolveAssetUrl } from '@/utils/url';
 import { fetchPaper } from '@/services/paper.service';
@@ -87,10 +87,12 @@ const getEvaluationScore = (item: Record<string, unknown> | undefined): number |
 const getQuestionEvaluation = (
   items: Record<string, unknown>[],
   questionIndex: number,
-  questionText: string
+  questionText: string,
+  questionNumberStr?: string
 ): Record<string, unknown> | undefined => {
-  const expectedNumber = String(questionIndex);
   const normalize = (value: unknown) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const expectedNum = normalize(questionNumberStr || String(questionIndex));
+  const expectedIndex = String(questionIndex);
   const normalizedQuestion = normalize(questionText);
   const hasQuestionSignals = items.some((item) =>
     [
@@ -107,30 +109,63 @@ const getQuestionEvaluation = (
   );
 
   return items.find((item, idx) => {
-    const number = item.questionNumber ?? item.number ?? item.questionNo ?? item.qNo ?? item.index;
-    if (number !== undefined && String(number).replace(/\D/g, '') === expectedNumber) return true;
+    const rawNumber = item.questionNumber ?? item.number ?? item.questionNo ?? item.qNo;
+    if (rawNumber !== undefined) {
+      const norm = normalize(rawNumber);
+      if (norm === expectedNum || norm === expectedIndex) return true;
+    }
     const id = item.questionId ?? item.id;
-    if (id !== undefined && String(id).replace(/\D/g, '') === expectedNumber) return true;
+    if (id !== undefined) {
+      const normId = normalize(id);
+      if (normId === expectedNum || normId === expectedIndex) return true;
+    }
     const itemQuestion = normalize(item.question ?? item.questionText);
-    if (itemQuestion && normalizedQuestion && normalizedQuestion.includes(itemQuestion.slice(0, 32))) return true;
+    if (itemQuestion && normalizedQuestion && (normalizedQuestion.includes(itemQuestion.slice(0, 32)) || itemQuestion.includes(normalizedQuestion.slice(0, 32)))) return true;
     return hasQuestionSignals && idx === questionIndex - 1 && items.length > 1;
   });
 };
 
 type LayoutRegionPayload = AnswerRegion & { questionNumber?: string; confidence?: number };
 
-const normaliseQuestionNumber = (value: unknown) => String(value || '').replace(/[^0-9a-z]/gi, '').toLowerCase();
+const normaliseQuestionNumber = (value: unknown): string => {
+  const str = String(value || '').trim();
+  const stripped = str.replace(/^(?:q(?:uestion)?|ans(?:wer)?)\s*[:.\-)]?\s*/i, '');
+  return stripped.replace(/[^0-9a-z]/gi, '').toLowerCase();
+};
 
-/** Converts only validated, image-anchored backend regions for the viewer. */
+/** Converts only validated, image-anchored backend regions for the viewer, merging multi-segment / multi-page answers. */
 const indexLayoutRegions = (regions: unknown): Map<string, AnswerRegion> => {
-  if (!Array.isArray(regions)) return new Map();
+  const list = Array.isArray(regions)
+    ? regions
+    : Array.isArray((regions as any)?.regions)
+    ? (regions as any).regions
+    : [];
   const mapped = new Map<string, AnswerRegion>();
-  regions.forEach((region: LayoutRegionPayload) => {
+  list.forEach((region: LayoutRegionPayload) => {
     const questionNumber = normaliseQuestionNumber(region.questionNumber);
     if (!questionNumber || !Number.isFinite(region.topPercent) || !Number.isFinite(region.leftPercent) ||
       !Number.isFinite(region.widthPercent) || !Number.isFinite(region.heightPercent) ||
       (region.confidence !== undefined && region.confidence < 0.6)) return;
-    mapped.set(questionNumber, region);
+
+    if (mapped.has(questionNumber)) {
+      const existing = mapped.get(questionNumber)!;
+      const additional: AdditionalAnswerRegion = {
+        page: region.page || 1,
+        topPercent: region.topPercent,
+        leftPercent: region.leftPercent,
+        widthPercent: region.widthPercent,
+        heightPercent: region.heightPercent,
+        label: region.label,
+        segmentTitle: `Continuation (Page ${region.page || 1})`,
+      };
+      existing.spansMultiplePages = existing.spansMultiplePages || existing.page !== (region.page || 1);
+      existing.additionalRegions = [...(existing.additionalRegions || []), additional];
+    } else {
+      mapped.set(questionNumber, {
+        ...region,
+        additionalRegions: region.additionalRegions ? [...region.additionalRegions] : [],
+      });
+    }
   });
   return mapped;
 };
@@ -333,9 +368,10 @@ export default function GraderDashboard() {
           : [];
 
         generatedPaper.sections.forEach((sec) => {
-          sec.questions.forEach((qItem) => {
+          sec.questions.forEach((qItem: any) => {
+            const qNumberStr = String(qItem.number || qIndex);
             const qMaxMarks = qItem.marks || (qItem.question.length > 60 ? 3 : 1);
-            const qEvaluation = getQuestionEvaluation(evaluationItems, qIndex, qItem.question);
+            const qEvaluation = getQuestionEvaluation(evaluationItems, qIndex, qItem.question, qNumberStr);
             const evaluationScore = getEvaluationScore(qEvaluation);
             const qAwarded = evaluationScore === null ? 0 : Math.max(0, Math.min(qMaxMarks, evaluationScore));
             const studentAnswerText = getEvaluationText(qEvaluation, [
@@ -348,13 +384,21 @@ export default function GraderDashboard() {
             const correctAnswer = getAnswerText(qItem.answer);
             const answerExplanation = getAnswerExplanation(qItem.answer);
             const hasPerQuestionGrade = Boolean(qEvaluation);
-            const qStatus = !hasPerQuestionGrade
-              ? ('unmatched' as const)
-              : qAwarded <= 0 && !studentAnswerText
-              ? ('unanswered' as const)
-              : qAwarded >= qMaxMarks
-              ? ('answered' as const)
-              : ('partial' as const);
+
+            const isBlank = !studentAnswerText || ['unanswered', 'blank', 'left blank', 'none', 'n/a'].includes(studentAnswerText.trim().toLowerCase());
+            let qStatus: 'answered' | 'unanswered' | 'partial' | 'incorrect' | 'unmatched';
+            if (!hasPerQuestionGrade) {
+              qStatus = 'unmatched';
+            } else if (isBlank && qAwarded === 0) {
+              qStatus = 'unanswered';
+            } else if (qAwarded >= qMaxMarks) {
+              qStatus = 'answered';
+            } else if (qAwarded > 0) {
+              qStatus = 'partial';
+            } else {
+              qStatus = 'incorrect';
+            }
+
             const reason = getEvaluationText(qEvaluation, [
               'reason',
               'explanation',
@@ -365,8 +409,9 @@ export default function GraderDashboard() {
 
             paperQuestions.push({
               id: `q_${qIndex}`,
-              number: `${qIndex}`,
-              mainNumber: `${qIndex}`,
+              number: qNumberStr,
+              mainNumber: qNumberStr.replace(/[^0-9]/g, '') || `${qIndex}`,
+              subPart: qNumberStr.replace(/^[0-9]+[.\s()*-]*/, '').replace(/[^a-zA-Z]/g, '') || undefined,
               text: qItem.question,
               maxMarks: qMaxMarks,
               marksAwarded: qAwarded,
@@ -378,26 +423,28 @@ export default function GraderDashboard() {
                   ? 'Correct answer. The submitted response matches the expected answer.'
                   : qStatus === 'unanswered'
                   ? 'Answer left blank or no matching response was detected for this question.'
+                  : qStatus === 'incorrect'
+                  ? 'Incorrect answer. The response does not match the expected marking scheme.'
                   : 'Partially correct. Some expected points are missing or unclear.')
                 : `Overall grading completed${lastEval?.score !== undefined ? ` (${lastEval.score}/${lastEval.totalMarks || selectedAssignment.totalMarks})` : ''}, but the grader did not return per-question evidence for this item. Review the highlighted answer area against the correct answer below.`,
               suggestedSolution: [correctAnswer, answerExplanation].filter(Boolean).join('\n\n') || answerKey.trim() || undefined,
               studentAnswerText: studentAnswerText || undefined,
               orderInAnswerSheet: qIndex,
               isOutOfOrder: false,
-              keyConcepts: [selectedAssignment.subject || 'Cloud', sec.title || 'General'],
+              keyConcepts: [selectedAssignment.subject || 'Core', sec.title || 'General'],
             });
 
             extractedOcrQuestions.push({
               id: `ocr-${selectedAssignment.id}-q${qIndex}`,
-              number: `${qIndex}`,
-              mainNumber: `${qIndex}`,
+              number: qNumberStr,
+              mainNumber: qNumberStr.replace(/[^0-9]/g, '') || `${qIndex}`,
               text: qItem.question,
               maxMarks: qMaxMarks,
               section: sec.title || 'General',
               type: qMaxMarks <= 1 ? 'mcq' : 'short',
-              keyConcepts: [selectedAssignment.subject || 'Cloud', sec.title || 'Section'],
+              keyConcepts: [selectedAssignment.subject || 'Core', sec.title || 'Section'],
               confidence: Number((99.1 + ((qIndex * 3) % 8) / 10).toFixed(1)),
-              rawSnippet: `${qIndex}. ${qItem.question} [${qMaxMarks} Marks]`,
+              rawSnippet: `${qNumberStr}. ${qItem.question} [${qMaxMarks} Marks]`,
             });
 
             qIndex++;
@@ -406,10 +453,9 @@ export default function GraderDashboard() {
 
         if (paperQuestions.length > 0) {
           const imageAnchoredRegions = isSingleSheet ? indexLayoutRegions(lastEval?.answerRegions) : new Map();
-          mappedQuestions = paperQuestions.map((question, index) => ({
+          mappedQuestions = paperQuestions.map((question) => ({
             ...question,
-            // Never fall back to equal bands or answer-length estimates. A box
-            // is rendered only when layout OCR mapped it to actual image pixels.
+            // Match layout region by normalized question number
             answerRegion: imageAnchoredRegions.get(normaliseQuestionNumber(question.number)),
           }));
           generatedOcrData = {
@@ -437,21 +483,81 @@ export default function GraderDashboard() {
             extractedQuestions: extractedOcrQuestions,
           };
         }
+      } else if (Array.isArray(lastEval?.questions) && lastEval.questions.length > 0) {
+        const imageAnchoredRegions = indexLayoutRegions(lastEval?.answerRegions);
+        mappedQuestions = lastEval.questions.map((q: any, idx: number) => {
+          const qNumberStr = String(q.questionNumber || q.number || idx + 1);
+          const maxMarks = Number(q.maxMarks) || 2;
+          const marksAwarded = Math.max(0, Math.min(maxMarks, Number(q.score ?? q.marksAwarded) || 0));
+          const studentText = q.studentAnswer || q.studentAnswerText || '';
+          const isBlank = !studentText || ['unanswered', 'blank', 'left blank', 'none', 'n/a'].includes(studentText.trim().toLowerCase());
+          const status = marksAwarded === 0
+            ? (isBlank ? 'unanswered' : 'incorrect')
+            : marksAwarded >= maxMarks
+            ? 'answered'
+            : 'partial';
+
+          return {
+            id: `q-${idx + 1}`,
+            number: qNumberStr,
+            mainNumber: qNumberStr.replace(/[^0-9]/g, '') || String(idx + 1),
+            subPart: qNumberStr.match(/[a-z]/i)?.[0]?.toLowerCase(),
+            text: q.questionText || q.text || `Question ${qNumberStr}`,
+            maxMarks,
+            marksAwarded,
+            status,
+            aiFeedback: q.reason || q.aiFeedback || q.explanation || 'Evaluated by AI Grader',
+            suggestedSolution: q.correctAnswer || q.suggestedSolution,
+            studentAnswerText: studentText,
+            answerRegion: imageAnchoredRegions.get(normaliseQuestionNumber(qNumberStr)),
+          };
+        });
+      } else if (selectedStudent?.fileUrl && lastEval?.answerRegions) {
+        const imageAnchoredRegions = indexLayoutRegions(lastEval?.answerRegions);
+        mappedQuestions = basePreset.questions.map((q) => ({
+          ...q,
+          answerRegion: imageAnchoredRegions.get(normaliseQuestionNumber(q.number)) || q.answerRegion,
+        }));
       }
 
-      // Live student answer sheet page
+      // Live student answer sheet pages with multi-page support
       const rawFileName = selectedStudent?.fileUrl
         ? selectedStudent.fileUrl.replace(/\\/g, '/').split('/').pop() || 'student_answer_sheet.png'
         : basePreset.answerSheetFile.name;
 
-      const studentPages = selectedStudent?.fileUrl
-        ? [{
+      let studentPages: AnswerSheetPage[];
+      if (Array.isArray(lastEval?.pages) && lastEval.pages.length > 0) {
+        studentPages = lastEval.pages.map((p: any) => ({
+          pageNumber: Number(p.pageNumber) || 1,
+          title: p.title || `Page ${p.pageNumber || 1}`,
+          imageType: (p.imageType || 'custom-image') as 'custom-image' | 'handwritten-canvas',
+          imageUrl: p.imageUrl ? resolveAssetUrl(p.imageUrl) : undefined,
+        }));
+      } else if (selectedStudent?.fileUrl) {
+        const rawRegions = Array.isArray(lastEval?.answerRegions)
+          ? lastEval.answerRegions
+          : Array.isArray(lastEval?.answerRegions?.regions)
+          ? lastEval.answerRegions.regions
+          : [];
+        const maxPage = Math.max(1, ...rawRegions.map((r: any) => Number(r.page) || 1));
+        if (maxPage > 1) {
+          studentPages = Array.from({ length: maxPage }, (_, i) => ({
+            pageNumber: i + 1,
+            title: `Page ${i + 1}`,
+            imageType: 'custom-image' as const,
+            imageUrl: resolveAssetUrl(selectedStudent.fileUrl),
+          }));
+        } else {
+          studentPages = [{
             pageNumber: 1,
             title: 'Uploaded Student Answer Sheet',
             imageType: 'custom-image' as const,
             imageUrl: resolveAssetUrl(selectedStudent.fileUrl),
-          }]
-        : basePreset.pages;
+          }];
+        }
+      } else {
+        studentPages = basePreset.pages;
+      }
 
       const totalCalculatedScore = mappedQuestions.reduce((acc, q) => acc + (q.marksAwarded || 0), 0);
       const totalCalculatedMax = mappedQuestions.reduce((acc, q) => acc + (q.maxMarks || 0), 0);
