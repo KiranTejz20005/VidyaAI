@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { AssessmentData, QuestionItem } from './graderTypes';
-import { Layers, Sparkles, AlertTriangle } from 'lucide-react';
+import { Layers, Sparkles } from 'lucide-react';
 
 interface HandwrittenSheetRendererProps {
   assessment: AssessmentData;

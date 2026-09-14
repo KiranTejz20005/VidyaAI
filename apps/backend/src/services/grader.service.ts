@@ -138,7 +138,7 @@ export async function evaluateSubmission(submissionId: string): Promise<any> {
       ? data.criteriaGrades
       : computedQuestionGrades;
 
-    let expectedQuestions = generatedPaperSections
+    const expectedQuestions = generatedPaperSections
       .flatMap((section: any) => Array.isArray(section.questions) ? section.questions : [])
       .map((question: any, index: number) => {
         const marks = Number(question.marks) || undefined;
