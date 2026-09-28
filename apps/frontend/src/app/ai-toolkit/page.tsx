@@ -34,7 +34,7 @@ const TOOLKIT_OPTIONS = [
     title: 'Tests Generation',
     description: 'Create comprehensive term exams and standardized tests perfectly aligned with your curriculum.',
     icon: CheckSquare,
-    href: '/ai-toolkit/tests',
+    href: '/papers',
     color: 'from-emerald-500 to-teal-500',
     bgLight: '#ECFDF5',
     iconColor: '#10B981',

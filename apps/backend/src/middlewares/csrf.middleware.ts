@@ -21,7 +21,8 @@ export function csrfProtection(req: Request, res: Response, next: NextFunction):
       if (process.env.NODE_ENV === 'production' && process.env.FRONTEND_URL) {
         try {
           const frontendUrl = new URL(process.env.FRONTEND_URL.split(',')[0]);
-          cookieDomain = frontendUrl.hostname.startsWith('localhost') ? undefined : '.' + frontendUrl.hostname;
+          const hostname = frontendUrl.hostname.replace(/^www\./, '');
+          cookieDomain = (hostname.includes('.') && !hostname.startsWith('localhost')) ? '.' + hostname : undefined;
         } catch(e) {
           // Ignore invalid URL
         }

@@ -37,11 +37,25 @@ import {
 
 const REFRESH_COOKIE_NAME = 'refresh_token';
 
+function getCookieDomain(): string | undefined {
+  if (process.env.NODE_ENV === 'production' && process.env.FRONTEND_URL) {
+    try {
+      const frontendUrl = new URL(process.env.FRONTEND_URL.split(',')[0]);
+      const hostname = frontendUrl.hostname.replace(/^www\./, '');
+      return (hostname.includes('.') && !hostname.startsWith('localhost')) ? '.' + hostname : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 function setRefreshCookie(res: Response, token: string): void {
   res.cookie(REFRESH_COOKIE_NAME, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    domain: getCookieDomain(),
     maxAge: 30 * 24 * 60 * 60 * 1000,
   });
 }
@@ -51,6 +65,7 @@ function clearRefreshCookie(res: Response): void {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    domain: getCookieDomain(),
   });
 }
 

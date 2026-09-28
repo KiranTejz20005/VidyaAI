@@ -23,12 +23,26 @@ function getUserId(req: Request): string {
   return userId;
 }
 
+function getCookieDomain(): string | undefined {
+  if (process.env.NODE_ENV === 'production' && process.env.FRONTEND_URL) {
+    try {
+      const frontendUrl = new URL(process.env.FRONTEND_URL.split(',')[0]);
+      const hostname = frontendUrl.hostname.replace(/^www\./, '');
+      return (hostname.includes('.') && !hostname.startsWith('localhost')) ? '.' + hostname : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 // Helper to set HttpOnly secure cookie
 function setRefreshCookie(res: Response, token: string) {
   res.cookie(REFRESH_COOKIE_NAME, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    domain: getCookieDomain(),
     maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
   });
 }
@@ -39,6 +53,7 @@ function clearRefreshCookie(res: Response) {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    domain: getCookieDomain(),
   });
 }
 

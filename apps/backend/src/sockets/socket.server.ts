@@ -26,12 +26,42 @@ function isValidAssignmentId(value: unknown): value is string {
   return typeof value === 'string' && ASSIGNMENT_ID_RE.test(value.trim());
 }
 
-function parseOrigins(raw: string): string[] {
-  return raw
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((s) => s.replace(/\/+$/, ''));
+function parseOrigins(raw?: string): string[] {
+  const origins = new Set<string>([
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'https://vidhyaai.tech',
+    'https://www.vidhyaai.tech',
+    'https://api.vidhyaai.tech',
+    'https://vidyaai.tech',
+    'https://www.vidyaai.tech',
+  ]);
+
+  if (raw) {
+    const parsed = raw
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((s) => s.replace(/\/+$/, ''));
+
+    for (const item of parsed) {
+      origins.add(item);
+      try {
+        const u = new URL(item);
+        if (u.hostname.startsWith('www.')) {
+          origins.add(`${u.protocol}//${u.hostname.slice(4)}${u.port ? ':' + u.port : ''}`);
+        } else if (!u.hostname.startsWith('localhost') && !u.hostname.startsWith('127.')) {
+          origins.add(`${u.protocol}//www.${u.hostname}${u.port ? ':' + u.port : ''}`);
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  return Array.from(origins);
 }
 
 function isAllowedVercelPreview(hostname: string): boolean {

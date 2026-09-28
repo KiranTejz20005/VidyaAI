@@ -58,12 +58,42 @@ process.on('unhandledRejection', (reason) => {
   process.exit(1);
 });
 
-function parseCorsOrigins(raw: string): string[] {
-  return raw
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((s) => s.replace(/\/+$/, ''));
+function parseCorsOrigins(raw?: string): string[] {
+  const origins = new Set<string>([
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'https://vidhyaai.tech',
+    'https://www.vidhyaai.tech',
+    'https://api.vidhyaai.tech',
+    'https://vidyaai.tech',
+    'https://www.vidyaai.tech',
+  ]);
+
+  if (raw) {
+    const parsed = raw
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((s) => s.replace(/\/+$/, ''));
+
+    for (const item of parsed) {
+      origins.add(item);
+      try {
+        const u = new URL(item);
+        if (u.hostname.startsWith('www.')) {
+          origins.add(`${u.protocol}//${u.hostname.slice(4)}${u.port ? ':' + u.port : ''}`);
+        } else if (!u.hostname.startsWith('localhost') && !u.hostname.startsWith('127.')) {
+          origins.add(`${u.protocol}//www.${u.hostname}${u.port ? ':' + u.port : ''}`);
+        }
+      } catch {
+        // ignore invalid URL string
+      }
+    }
+  }
+
+  return Array.from(origins);
 }
 
 async function failStaleQueuedJobs(): Promise<void> {
@@ -216,29 +246,35 @@ function createApp() {
   app.set('trust proxy', 1);
 
   const corsOrigins = parseCorsOrigins(env.FRONTEND_URL);
-  const ALLOWED_ORIGINS = [
-    'http://localhost:3000',
-    'http://127.0.0.1:3000',
-    'http://localhost:5173',
-    'http://127.0.0.1:5173',
-    ...corsOrigins,
-  ];
 
   const corsMiddleware = cors({
     origin: (origin, callback) => {
       if (!origin) return callback(null, true);
       const normalizedOrigin = origin.replace(/\/+$/, '');
-      const allowed = ALLOWED_ORIGINS.includes(normalizedOrigin);
-      // Wildcard subdomain matching is intentionally omitted for security.
-      // All origins must be explicitly listed in FRONTEND_URL env var.
+      const allowed = corsOrigins.includes(normalizedOrigin);
       if (!allowed) {
         logger.warn(`[CORS] Blocked origin: ${normalizedOrigin}`);
       }
       callback(null, allowed);
     },
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'X-CSRF-Token',
+      'x-csrf-token',
+      'X-Request-Id',
+      'x-request-id',
+      'X-Requested-With',
+      'Accept',
+      'Origin',
+      'Access-Control-Request-Method',
+      'Access-Control-Request-Headers',
+      'Cache-Control',
+      'Pragma',
+    ],
+    optionsSuccessStatus: 204,
   });
   app.use(corsMiddleware);
   app.options('*', corsMiddleware);
