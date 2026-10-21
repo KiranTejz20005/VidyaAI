@@ -50,6 +50,15 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  async redirects() {
+    return [
+      {
+        source: "/teachers",
+        destination: "/teacher",
+        permanent: true,
+      },
+    ];
+  },
   async headers() {
     return [
       {

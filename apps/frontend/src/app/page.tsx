@@ -116,7 +116,7 @@ export default function LandingPage() {
             whileHover={{ scale: 1.1, translateY: -2 }}
             whileTap={{ scale: 0.95 }}
             onClick={scrollToTop}
-            className="fixed bottom-6 right-6 z-50 p-3 rounded-full bg-[#1e1e1a] text-white border border-[#f3ede4] shadow-lg hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-[#e05934] flex items-center justify-center cursor-pointer transition-shadow"
+            className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-40 p-2.5 sm:p-3 rounded-full bg-[#1e1e1a]/90 backdrop-blur-sm text-white border border-[#f3ede4] shadow-lg hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-[#e05934] flex items-center justify-center cursor-pointer transition-all"
             aria-label="Back to top"
           >
             <ArrowUp className="w-5 h-5 text-[#e05934]" />

@@ -27,23 +27,25 @@ export default function DashboardMockup() {
   return (
     <div className="w-full bg-white rounded-2xl border border-[#f3ede4] shadow-2xl overflow-hidden dashboard-shadow">
       {/* Top Toolbar / Window controls */}
-      <div className="bg-[#fcfbf9] px-4 py-3 border-b border-[#f3ede4] flex items-center justify-between">
-        <div className="flex items-center space-x-2">
-          <div className="w-3 h-3 rounded-full bg-rose-400" />
-          <div className="w-3 h-3 rounded-full bg-amber-400" />
-          <div className="w-3 h-3 rounded-full bg-emerald-400" />
-          <span className="text-xs text-gray-400 font-mono pl-2">dashboard.vidyaai.com/classroom-10b</span>
+      <div className="bg-[#fcfbf9] px-3 sm:px-4 py-2.5 sm:py-3 border-b border-[#f3ede4] flex items-center justify-between">
+        <div className="flex items-center space-x-2 min-w-0">
+          <div className="flex space-x-1.5 shrink-0">
+            <div className="w-2.5 sm:w-3 h-2.5 sm:h-3 rounded-full bg-rose-400" />
+            <div className="w-2.5 sm:w-3 h-2.5 sm:h-3 rounded-full bg-amber-400" />
+            <div className="w-2.5 sm:w-3 h-2.5 sm:h-3 rounded-full bg-emerald-400" />
+          </div>
+          <span className="text-[11px] sm:text-xs text-gray-400 font-mono pl-1 sm:pl-2 truncate">dashboard.vidyaai.com/classroom-10b</span>
         </div>
-        <div className="flex items-center space-x-3">
-          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-mono font-medium bg-[#e05934]/10 text-[#e05934]">
+        <div className="flex items-center space-x-3 shrink-0 ml-2">
+          <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] sm:text-xs font-mono font-medium bg-[#e05934]/10 text-[#e05934]">
             ● LIVE SESSION
           </span>
         </div>
       </div>
 
-      <div className="flex h-[480px] lg:h-[550px] overflow-hidden text-sm">
-        {/* Sidebar Mini Mockup */}
-        <div className="w-16 lg:w-48 bg-[#fcfbf9] border-r border-[#f3ede4] flex flex-col justify-between py-4 select-none shrink-0">
+      <div className="flex h-[520px] sm:h-[480px] lg:h-[550px] overflow-hidden text-sm">
+        {/* Sidebar Mini Mockup - hidden on mobile for maximum viewport width */}
+        <div className="hidden sm:flex sm:w-16 lg:w-48 bg-[#fcfbf9] border-r border-[#f3ede4] flex-col justify-between py-4 select-none shrink-0">
           <div className="space-y-6">
             {/* Logo placeholder */}
             <div className="px-3 lg:px-4 flex items-center gap-2">
@@ -108,13 +110,13 @@ export default function DashboardMockup() {
               <p className="text-xs text-gray-400 font-mono">ASSESSMENT #12 DETAIL</p>
               <h3 className="font-display font-medium text-lg text-gray-900">Current Assessment Summary: Physics - Ohm's Law</h3>
             </div>
-            <div className="flex items-center space-x-2">
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 max-w-full no-scrollbar">
               {/* Tabs selector */}
               {(["summary", "gaps", "actions"] as const).map((tab) => (
                 <button
                   key={tab}
                   onClick={() => setActiveTab(tab)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold tracking-wide transition-colors ${
+                  className={`px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg text-[11px] sm:text-xs font-semibold tracking-wide whitespace-nowrap transition-colors shrink-0 ${
                     activeTab === tab
                       ? "bg-[#e05934] text-white"
                       : "bg-[#fcfbf9] text-gray-600 hover:bg-[#f3ede4]"

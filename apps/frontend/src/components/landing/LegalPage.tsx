@@ -1,7 +1,7 @@
 'use client';
 
 import React from "react";
-import { Shield, FileText, Scale, ScrollText, Users, Lock, HeartHandshake, Cookie, AlertTriangle } from "lucide-react";
+import { Shield, ShieldCheck, FileText, Scale, ScrollText, Users, Lock, HeartHandshake, Cookie, AlertTriangle } from "lucide-react";
 import Header from "./Header";
 import Footer from "./Footer";
 import { useRouter } from "next/navigation";
@@ -208,8 +208,9 @@ export default function LegalPage({ initialTab }: LegalPageProps) {
                 <section>
                   <h2 className="font-display font-extrabold text-base text-gray-900 border-b border-gray-100 pb-2 mb-3">3. AI Processing & Large Language Models</h2>
                   <p>VidyaAI leverages secure, enterprise-grade AI LLM model endpoints. Crucially, <strong>our model configurations explicitly opt-out of data reuse pipelines</strong>:</p>
-                  <div className="bg-[#fcfbf9] border border-[#f3ede4] p-3.5 rounded-xl font-mono text-[10px] my-3 text-gray-700 leading-normal">
-                    📍 NO STUDENT ASSESSMENTS, SCORED COERCIONS, OR FEEDBACK PARAGRAPHS ARE RETAINED BY PUBLIC TRAINING PIPELINES.
+                  <div className="bg-[#fcfbf9] border border-[#f3ede4] p-3.5 rounded-xl font-mono text-[10px] my-3 text-gray-700 leading-normal flex items-start gap-2">
+                    <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <span>NO STUDENT ASSESSMENTS, SCORED COERCIONS, OR FEEDBACK PARAGRAPHS ARE RETAINED BY PUBLIC TRAINING PIPELINES.</span>
                   </div>
                   <p>This guarantees that your school's unique curriculum and student responses remain fully private and unshared.</p>
                 </section>
@@ -225,8 +226,9 @@ export default function LegalPage({ initialTab }: LegalPageProps) {
                 <section>
                   <h2 className="font-display font-extrabold text-base text-gray-900 border-b border-gray-100 pb-2 mb-3">2. AI Copilot Advisory Limits</h2>
                   <p>VidyaAI serves strictly as a **subjective diagnostic assistant (Copilot)** for academic grading tasks:</p>
-                  <div className="bg-[#fcfbf9] border border-[#f3ede4] p-3.5 rounded-xl font-mono text-[10px] my-3 text-gray-700 leading-normal">
-                    ⚠️ THE SOFTWARE GENERATES ADVISORY SCORE PROFILES AND SUGGESTIVE FEEDBACK PARAGRAPHS BASED ON SELECTED RUBRICS. ALL RESULTS ARE EXPLICITLY CLASSIFIED AS INTERMEDIATE WORK PRODUCTS. INSTRUCTIONAL STAFF ARE MANDATED TO PERSONALLY AUDIT, ACCEPT, OR OVERRIDE ALL SCORES PRIOR TO SYNC JOINING DISTRICT LER/SIS SYSTEM SHEETS.
+                  <div className="bg-[#fcfbf9] border border-[#f3ede4] p-3.5 rounded-xl font-mono text-[10px] my-3 text-gray-700 leading-normal flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                    <span>THE SOFTWARE GENERATES ADVISORY SCORE PROFILES AND SUGGESTIVE FEEDBACK PARAGRAPHS BASED ON SELECTED RUBRICS. ALL RESULTS ARE EXPLICITLY CLASSIFIED AS INTERMEDIATE WORK PRODUCTS. INSTRUCTIONAL STAFF ARE MANDATED TO PERSONALLY AUDIT, ACCEPT, OR OVERRIDE ALL SCORES PRIOR TO SYNC JOINING DISTRICT LER/SIS SYSTEM SHEETS.</span>
                   </div>
                 </section>
                 <section>

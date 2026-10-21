@@ -25,7 +25,7 @@ const DEFAULT_AVATARS = [
 
 export function WaitlistButton({
   label = 'Join Waitlist',
-  tooltipTitle = '15k+ already joined',
+  tooltipTitle = '2,500+ educators & institutions joined',
   href,
   onClick,
   className = '',

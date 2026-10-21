@@ -18,11 +18,11 @@ export default function Header({ onContactClick, onNavigate, currentView = "home
 
   const links = [
     { name: "Home", href: "/" },
-    { name: "Solutions", href: "/#solutions" },
-    { name: "Teachers", href: "/#teachers" },
-    { name: "About Us", href: "/#about" },
+    { name: "Solutions", href: "/solutions" },
+    { name: "Teachers", href: "/teacher" },
+    { name: "About Us", href: "/about" },
     { name: "Careers", href: "/careers" },
-    { name: "FAQs", href: "/#faqs" },
+    { name: "FAQs", href: "/faqs" },
   ];
 
   const handleLogoClick = (e: React.MouseEvent) => {
@@ -34,28 +34,44 @@ export default function Header({ onContactClick, onNavigate, currentView = "home
   };
 
   const handleLinkClick = (e: React.MouseEvent, name: string, href: string) => {
-    if (href === "/" || href === "/careers" || href === "/contact") {
+    if (href === "/" || name === "Home") {
+      if (pathname === "/") {
+        e.preventDefault();
+        if (onNavigate) onNavigate("home");
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+      return;
+    }
+
+    if (href === "/careers" || href === "/contact") {
       return; // Let <Link> handle it
     }
 
     if (pathname !== "/") {
-      return; // Let <Link> handle navigating to /#hash
+      return; // Let <Link> handle navigating to the clean route
     }
 
-    // We are on home page, handle smooth scroll
-    e.preventDefault();
-    if (currentView !== "home" && onNavigate) {
-      onNavigate("home");
-      
-      const elementId = href.replace("/#", "");
-      setTimeout(() => {
+    // We are on home page, handle smooth scroll to target section without placing '#' in URL
+    const targetMap: Record<string, string> = {
+      "/solutions": "solutions",
+      "/teacher": "teachers",
+      "/teachers": "teachers",
+      "/about": "about",
+      "/faqs": "faqs",
+    };
+    const elementId = targetMap[href];
+    if (elementId) {
+      e.preventDefault();
+      if (currentView !== "home" && onNavigate) {
+        onNavigate("home");
+        setTimeout(() => {
+          const el = document.getElementById(elementId);
+          if (el) el.scrollIntoView({ behavior: "smooth" });
+        }, 100);
+      } else {
         const el = document.getElementById(elementId);
         if (el) el.scrollIntoView({ behavior: "smooth" });
-      }, 100);
-    } else {
-      const elementId = href.replace("/#", "");
-      const el = document.getElementById(elementId);
-      if (el) el.scrollIntoView({ behavior: "smooth" });
+      }
     }
   };
 

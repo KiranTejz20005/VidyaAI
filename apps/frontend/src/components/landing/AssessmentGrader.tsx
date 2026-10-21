@@ -186,8 +186,8 @@ export default function AssessmentGrader() {
           <h2 className="font-display font-medium text-2xl sm:text-3xl md:text-4xl text-gray-900 tracking-tight leading-snug">
             AI Assignment & Assessment Grader
           </h2>
-          <p className="text-xs sm:text-sm text-gray-500 mt-2 max-w-lg mx-auto">
-            A clear, intuitive dashboard reveals performance trends, learning gaps, and data-driven recommendations for every class.
+          <p className="text-xs sm:text-sm text-gray-500 mt-2 max-w-xl mx-auto leading-relaxed">
+            Automate step-by-step grading for handwritten and digital submissions with curriculum rubrics, instant scoring, and actionable student feedback.
           </p>
         </div>
 

@@ -240,9 +240,9 @@ export default function SettingsPage() {
       <div className="mt-auto pt-16 pb-4 flex flex-col md:flex-row items-center justify-between gap-4 text-[11px] font-semibold text-gray-500">
         <div>© 2024 Vidya AI Ecosystem. All rights reserved.</div>
         <div className="flex items-center gap-6">
-          <a href="#" className="hover:text-gray-800 transition-colors">Privacy Policy</a>
-          <a href="#" className="hover:text-gray-800 transition-colors">Terms of Service</a>
-          <a href="#" className="hover:text-gray-800 transition-colors">Security Overview</a>
+          <a href="/privacy" className="hover:text-gray-800 transition-colors">Privacy Policy</a>
+          <a href="/terms" className="hover:text-gray-800 transition-colors">Terms of Service</a>
+          <a href="/acceptable-use" className="hover:text-gray-800 transition-colors">Security Overview</a>
         </div>
       </div>
     </div>

@@ -39,8 +39,8 @@ export default function SecurityPrivacy() {
           <h2 className="font-display font-medium text-2xl sm:text-3xl md:text-3xl.5 text-gray-900 tracking-tight">
             Security & Privacy
           </h2>
-          <p className="text-xs sm:text-sm text-gray-500 mt-2 max-w-lg mx-auto">
-            A clear, intuitive dashboard reveals performance trends, learning gaps, and data-driven recommendations for every class.
+          <p className="text-xs sm:text-sm text-gray-500 mt-2 max-w-xl mx-auto leading-relaxed">
+            Enterprise-grade data security with 256-bit encryption, strict privacy isolation, and zero student data retention in AI training.
           </p>
         </div>
 

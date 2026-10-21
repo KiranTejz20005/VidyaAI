@@ -8,7 +8,7 @@ import {
   Landmark, 
   TrendingUp, 
   CheckCircle2, 
-  DollarSign
+  IndianRupee
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -242,8 +242,10 @@ export default function LeadersGain() {
                         </div>
 
                         <div className="bg-orange-50/30 p-3 rounded-lg border border-orange-100/50 relative">
-                          <div className="flex justify-between text-[10px] text-[#e05934] font-mono mb-1.5 font-bold">
-                            <span>🔄 VidyaAI Accelerated Path</span>
+                          <div className="flex justify-between items-center text-[10px] text-[#e05934] font-mono mb-1.5 font-bold">
+                            <span className="flex items-center gap-1.5">
+                              <Zap className="w-3 h-3 text-[#e05934]" /> VidyaAI Accelerated Path
+                            </span>
                             <span>0.4 Days instantly</span>
                           </div>
                           <div className="w-full bg-orange-100/50 h-2.5 rounded-full overflow-hidden">
@@ -416,7 +418,7 @@ export default function LeadersGain() {
               <div className="bg-stone-50 border border-stone-100/50 p-3 rounded-lg flex items-center justify-between text-[10px] text-gray-500 select-none">
                 <span className="font-mono">PROJECTED ANNUAL SAVINGS PER SECTION:</span>
                 <span className="text-[#e05934] font-extrabold font-mono flex items-center gap-0.5">
-                  <DollarSign className="w-3 h-3 text-[#e05934]" /> 3,400+
+                  <IndianRupee className="w-3 h-3 text-[#e05934]" /> 2,80,000+
                 </span>
               </div>
 
