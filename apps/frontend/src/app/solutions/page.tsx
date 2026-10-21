@@ -12,10 +12,7 @@ import {
   Sparkles, 
   ArrowRight, 
   CheckCircle2, 
-  ShieldCheck, 
-  BarChart3, 
-  FileText,
-  Brain
+  ShieldCheck
 } from 'lucide-react';
 import Link from 'next/link';
 

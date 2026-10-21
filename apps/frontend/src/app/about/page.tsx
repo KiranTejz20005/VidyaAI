@@ -10,11 +10,8 @@ import {
   ShieldCheck, 
   Award, 
   Users, 
-  HeartHandshake, 
-  BookOpen, 
   Target, 
-  CheckCircle2, 
-  ArrowRight 
+  CheckCircle2 
 } from 'lucide-react';
 import Link from 'next/link';
 

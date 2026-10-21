@@ -7,15 +7,10 @@ import ContactModal from '@/components/landing/ContactModal';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   ChevronDown, 
-  Sparkles, 
   Search, 
   HelpCircle, 
-  Mail, 
-  ArrowRight,
-  ShieldCheck,
-  CheckCircle2
+  Mail 
 } from 'lucide-react';
-import Link from 'next/link';
 
 interface FAQItem {
   question: string;

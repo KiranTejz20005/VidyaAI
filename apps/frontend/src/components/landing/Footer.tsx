@@ -1,5 +1,4 @@
 import React from "react";
-import { motion } from "framer-motion";
 import { Crown, Heart } from "lucide-react";
 import { WaitlistButton } from "@/components/ui/WaitlistButton";
 
