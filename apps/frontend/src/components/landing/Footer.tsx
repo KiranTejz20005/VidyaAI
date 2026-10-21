@@ -1,6 +1,6 @@
 import React from "react";
 import { motion } from "framer-motion";
-import { Crown } from "lucide-react";
+import { Crown, Heart } from "lucide-react";
 import { WaitlistButton } from "@/components/ui/WaitlistButton";
 
 interface FooterProps {
@@ -167,29 +167,13 @@ export default function Footer({ onContactClick, onNavigate }: FooterProps) {
 
         </div>
 
-        {/* Massive VidyaAI letter backdrop */}
-        <div className="relative w-full overflow-hidden h-28 sm:h-40 md:h-52 select-none flex items-end justify-center cursor-default">
-          <div className="absolute inset-x-0 bottom-0 text-center font-display font-extrabold text-[80px] sm:text-[140px] md:text-[190px] xl:text-[230px] leading-none text-[#1e1e1a]/[0.04] tracking-wider flex justify-center items-end select-none" aria-hidden="true">
-            {"VidyaAI".split("").map((char, index) => (
-              <motion.span
-                key={index}
-                className="inline-block origin-bottom cursor-pointer select-none transition-colors duration-300"
-                whileHover={{
-                  y: -18,
-                  scale: 1.05,
-                  rotate: index % 2 === 0 ? 3 : -3,
-                  color: "#1e1e1a"
-                }}
-                transition={{
-                  type: "spring",
-                  stiffness: 260,
-                  damping: 12
-                }}
-              >
-                {char}
-              </motion.span>
-            ))}
-          </div>
+        {/* Heartfelt Handwritten Educator Tribute in Priestacy Signature */}
+        <div className="my-10 sm:my-14 max-w-4xl mx-auto px-4 text-center">
+          <p className="font-handwriting text-3xl sm:text-4xl md:text-[42px] text-gray-900 tracking-wide leading-[1.2] sm:leading-[1.25] select-none">
+            Handcrafted with{" "}
+            <Heart className="w-10 h-10 sm:w-12 sm:h-12 md:w-14 md:h-14 text-rose-500 fill-rose-500 inline-block align-middle mx-2 sm:mx-3 animate-pulse" />{" "}
+            for educators who would rather spend their Sunday evenings with family than a red correction pen.
+          </p>
         </div>
 
         {/* Legalese baseline */}
