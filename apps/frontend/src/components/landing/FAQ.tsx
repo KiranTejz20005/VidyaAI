@@ -58,7 +58,7 @@ export default function FAQ() {
             Frequently asked questions
           </h2>
           <p className="text-xs sm:text-sm text-gray-500 mt-2">
-            Start free, go pro when you're ready! No limits, no pressure.
+            Everything you need to know about curriculum alignment, evaluation accuracy, and institutional rollout.
           </p>
         </div>
 

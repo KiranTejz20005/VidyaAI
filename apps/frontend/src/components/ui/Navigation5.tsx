@@ -40,14 +40,14 @@ export function Navigation5() {
           {/* Desktop Navigation Links */}
           <div className="hidden lg:flex items-center gap-1">
             <Link
-              href="/#features"
+              href="/solutions"
               className="rounded-full bg-transparent px-4 py-2 text-sm font-medium text-neutral-600 transition-colors hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-50 hover:bg-neutral-50"
             >
               Features
             </Link>
 
             <Link
-              href="/#developers"
+              href="/careers"
               className="flex items-center gap-2 rounded-full bg-transparent px-4 py-2 text-sm font-medium text-neutral-600 transition-colors hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-50 hover:bg-neutral-50"
             >
               Developers
@@ -151,7 +151,7 @@ export function Navigation5() {
             </div>
 
             <Link
-              href="/#customers"
+              href="/solutions"
               className="rounded-full bg-transparent px-4 py-2 text-sm font-medium text-neutral-600 transition-colors hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-50 hover:bg-neutral-50"
             >
               Institutions
@@ -216,14 +216,14 @@ export function Navigation5() {
 
                   <div className="flex flex-col gap-3">
                     <Link
-                      href="/#features"
+                      href="/solutions"
                       className="text-sm font-medium text-neutral-900 py-1"
                     >
                       Features
                     </Link>
                     <div className="flex items-center justify-between py-1">
                       <Link
-                        href="/#developers"
+                        href="/careers"
                         className="text-sm font-medium text-neutral-900"
                       >
                         Developers
@@ -260,7 +260,7 @@ export function Navigation5() {
                     </div>
 
                     <Link
-                      href="/#customers"
+                      href="/solutions"
                       className="text-sm font-medium text-neutral-900 py-1"
                     >
                       Institutions

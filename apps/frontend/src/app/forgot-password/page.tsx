@@ -310,8 +310,8 @@ export default function ForgotPasswordPage() {
           <div className="footer-row-meta">
             <span>© 2026 Vidya AI</span>
             <div>
-              <a href="#">Privacy</a>
-              <a href="#">Terms</a>
+              <Link href="/privacy">Privacy</Link>
+              <Link href="/terms">Terms</Link>
             </div>
           </div>
         </div>

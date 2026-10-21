@@ -60,12 +60,19 @@ export default function Hero({ onBookMeeting }: HeroProps) {
         >
           <WaitlistButton
             label="Join Waitlist"
-            tooltipTitle="15k+ educators & schools enrolled"
+            tooltipTitle="2,500+ educators & institutions joined"
             onClick={onBookMeeting}
           />
           
           <a
-            href="#teachers"
+            href="/teacher"
+            onClick={(e) => {
+              if (typeof window !== "undefined" && window.location.pathname === "/") {
+                e.preventDefault();
+                const el = document.getElementById("teachers");
+                if (el) el.scrollIntoView({ behavior: "smooth" });
+              }
+            }}
             className="w-full sm:w-auto px-7 py-3 rounded-full bg-white text-stone-800 hover:text-black border border-[#f3ede4] hover:border-orange-200 font-semibold text-xs sm:text-sm tracking-wide shadow-xs active:scale-95 transition-all duration-200 flex items-center justify-center gap-1.5"
           >
             <span>Explore Interfaces</span>

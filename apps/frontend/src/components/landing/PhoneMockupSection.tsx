@@ -5,7 +5,8 @@ import {
   Star, 
   TrendingUp, 
   ShieldCheck,
-  Sparkles
+  Sparkles,
+  FileText
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -355,7 +356,10 @@ export default function PhoneMockupSection() {
                       </div>
                       
                       <div className="bg-orange-50/40 p-2.5 rounded-lg border border-orange-50 text-xs">
-                        <p className="font-semibold text-gray-950 mb-1">📝 Homework Summary: Physics 10B</p>
+                        <p className="font-semibold text-gray-950 mb-1 flex items-center gap-1.5">
+                          <FileText className="w-3.5 h-3.5 text-[#e05934] shrink-0" />
+                          <span>Homework Summary: Physics 10B</span>
+                        </p>
                         <p className="text-[11px] text-gray-600 leading-relaxed">
                           "Rohit scored <strong className="text-emerald-700">8/10</strong> on electricity worksheet. He mapped the series equations flawlessly, but requires home practice matching parallel formula ratios before Friday."
                         </p>
@@ -382,15 +386,8 @@ export default function PhoneMockupSection() {
           </div>
         </div>
 
-        {/* Small Bottom Quote text */}
-        <div className="max-w-3xl mx-auto text-center mt-12 px-6">
-          <p className="text-xs sm:text-sm italic text-gray-500 leading-relaxed font-sans max-w-2xl mx-auto">
-            "By implementing VidyaAI, we've successfully addressed the two biggest challenges in our institution: teacher workload and personalized feedback for students. It's the perfect balance of automation and human oversight."
-          </p>
-        </div>
-
-        {/* Testimonial Dr. A Sharma block */}
-        <div className="max-w-3xl mx-auto mt-20 bg-[#fcfbf9]/60 border border-[#f3ede4] rounded-2xl p-6 sm:p-10 text-center relative shadow-xs">
+        {/* Testimonial Dr. A. K. Sharma block */}
+        <div className="max-w-3xl mx-auto mt-16 bg-[#fcfbf9]/60 border border-[#f3ede4] rounded-2xl p-6 sm:p-10 text-center relative shadow-xs">
           <span className="absolute top-4 left-6 text-orange-200 font-serif text-8xl leading-none select-none">“</span>
           
           <p className="font-sans font-medium text-gray-800 text-sm sm:text-base leading-relaxed relative z-10 px-4">
@@ -398,12 +395,8 @@ export default function PhoneMockupSection() {
           </p>
 
           <div className="mt-8 flex flex-col items-center">
-            {/* Avatar block */}
-            <div className="w-12 h-12 rounded-full border border-orange-200 overflow-hidden bg-orange-50 flex items-center justify-center font-display font-bold text-[#e05934] mb-3 text-sm tracking-wide shadow-xs">
-              JD
-            </div>
-            <h6 className="font-display font-semibold text-xs sm:text-sm text-gray-900">Dr. James Doe</h6>
-            <p className="text-[11px] text-[#e05934] font-medium leading-none mt-1">Director of Academics, Excel Global School</p>
+            <h6 className="font-display font-semibold text-xs sm:text-sm text-gray-900">Dr. A. K. Sharma</h6>
+            <p className="text-[11px] text-[#e05934] font-medium leading-none mt-1">Academic Director & Senior Curriculum Coordinator, Delhi Public School Society</p>
           </div>
         </div>
 

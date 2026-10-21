@@ -3431,15 +3431,16 @@ hr { border: none; border-top: 1px solid var(--border); }
 
 /* Custom continuous scrolling marquee / ticker animation */
 @keyframes marquee {
-  0% { transform: translateX(0%); }
-  100% { transform: translateX(-50%); }
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-100%); }
 }
 
 .animate-marquee {
-  animation: marquee 30s linear infinite;
+  animation: marquee 45s linear infinite;
+  will-change: transform;
 }
 
-.animate-marquee:hover {
+.marquee-container:hover .animate-marquee {
   animation-play-state: paused;
 }
 

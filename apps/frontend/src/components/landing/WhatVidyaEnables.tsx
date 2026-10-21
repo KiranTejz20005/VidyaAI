@@ -314,8 +314,18 @@ export default function WhatVidyaEnables() {
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     placeholder="Search query (e.g. Aarav, Kunal)..."
-                    className="w-full bg-white border border-gray-200 text-[10px] pl-8 pr-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-[#e05934] rounded-lg text-gray-800"
+                    className="w-full bg-white border border-gray-200 text-[10px] pl-8 pr-6 py-1.5 focus:outline-none focus:ring-1 focus:ring-[#e05934] rounded-lg text-gray-800"
                   />
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery("")}
+                      className="absolute right-2 top-1.5 text-gray-400 hover:text-gray-700 text-xs font-bold leading-none p-0.5"
+                      aria-label="Clear search"
+                    >
+                      ×
+                    </button>
+                  )}
                 </div>
                 <NativeSelect
                   value={selectedFilter}

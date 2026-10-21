@@ -191,7 +191,7 @@ export default function Auth7() {
             >
               Already have an account?{' '}
               <a
-                href="#"
+                href="/login"
                 className="font-semibold text-neutral-900 hover:underline"
               >
                 Log in
