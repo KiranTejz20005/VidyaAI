@@ -24,6 +24,13 @@ export default function RootLayout({
         <link rel="icon" type="image/png" href="/logo-icon.png" sizes="any" />
         <link rel="shortcut icon" type="image/png" href="/logo-icon.png" />
         <link rel="apple-touch-icon" href="/logo-icon.png" />
+        {/* Cabinet Grotesk display face (Fontshare) for marketing + app chrome */}
+        <link rel="preconnect" href="https://api.fontshare.com" />
+        <link rel="preconnect" href="https://cdn.fontshare.com" crossOrigin="" />
+        <link
+          rel="stylesheet"
+          href="https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@500,700,800&display=swap"
+        />
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(orgSchema) }}

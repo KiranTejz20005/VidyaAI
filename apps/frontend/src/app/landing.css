@@ -1,0 +1,231 @@
+/* Marketing home page tokens & utilities (merged with the app Tailwind pipeline). */
+
+@theme {
+  /* Palette */
+  --color-paper: #fcfbf9;
+  --color-cream: #faf6f1;
+  --color-ink: #101828;
+  --color-ink-soft: #364153;
+  --color-mute: #6a7282;
+  --color-line: #f0e9e0;
+  --color-brand: #e05934;
+  --color-brand-soft: #f08a62;
+  --color-brand-tint: #fef1ea;
+  --color-sun: #f7a531;
+  --color-night: #15100e;
+
+  /* Motion tokens */
+  --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out-strong: cubic-bezier(0.77, 0, 0.175, 1);
+
+  /* Elevation */
+  --shadow-card:
+    inset 0 1px 0 rgb(255 255 255 / 0.9), 0 1px 2px rgb(16 17 20 / 0.04),
+    0 14px 34px -14px rgb(16 17 20 / 0.14);
+  --shadow-float:
+    0 40px 90px -30px rgb(150 60 20 / 0.28), 0 12px 30px -12px rgb(16 17 20 / 0.16);
+  --shadow-button:
+    inset 0 1px 0 rgb(255 255 255 / 0.18), 0 1px 2px rgb(16 17 20 / 0.3),
+    0 10px 24px -10px rgb(16 17 20 / 0.55);
+  --shadow-brand:
+    inset 0 1px 0 rgb(255 255 255 / 0.22), 0 10px 15px -3px rgb(224 89 52 / 0.28),
+    0 4px 6px -4px rgb(224 89 52 / 0.28);
+
+  /* Looping animations */
+  --animate-marquee: marquee 44s linear infinite;
+  --animate-aurora: aurora 18s ease-in-out infinite alternate;
+  --animate-scan: scan 2.8s var(--ease-in-out-strong) infinite alternate;
+  --animate-float: float 7s ease-in-out infinite;
+  --animate-orbit: orbit 46s linear infinite;
+  --animate-orbit-reverse: orbit 30s linear infinite reverse;
+  --animate-ping-soft: ping-soft 2.4s var(--ease-out-strong) infinite;
+  --animate-dash: dash 2.6s linear infinite;
+  --animate-travel: travel 3.6s var(--ease-in-out-strong) infinite;
+  --animate-work: work 2.6s linear infinite;
+  --animate-blink: blink 1.2s ease-in-out infinite;
+  --animate-caret: caret 0.9s steps(1) infinite;
+
+  @keyframes marquee {
+    to {
+      transform: translateX(-50%);
+    }
+  }
+  @keyframes aurora {
+    to {
+      transform: translate3d(3%, -4%, 0) rotate(6deg) scale(1.08);
+    }
+  }
+  @keyframes scan {
+    from {
+      transform: translateY(-20%);
+    }
+    to {
+      transform: translateY(420%);
+    }
+  }
+  @keyframes float {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-8px);
+    }
+  }
+  @keyframes orbit {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @keyframes ping-soft {
+    0% {
+      transform: scale(1);
+      opacity: 0.55;
+    }
+    100% {
+      transform: scale(1.9);
+      opacity: 0;
+    }
+  }
+  @keyframes dash {
+    from {
+      stroke-dashoffset: 1;
+    }
+    to {
+      stroke-dashoffset: 0;
+    }
+  }
+  @keyframes travel {
+    0% {
+      transform: translateX(0);
+      opacity: 0;
+    }
+    10%,
+    90% {
+      opacity: 1;
+    }
+    100% {
+      transform: translateX(var(--travel, 100%));
+      opacity: 0;
+    }
+  }
+  @keyframes work {
+    0% {
+      transform: scaleX(0.04);
+    }
+    85%,
+    100% {
+      transform: scaleX(1);
+    }
+  }
+  @keyframes blink {
+    0%,
+    100% {
+      opacity: 0.25;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+  @keyframes caret {
+    50% {
+      opacity: 0;
+    }
+  }
+}
+
+/* Decorative layers for the marketing home page */
+.aurora {
+  background:
+    radial-gradient(38% 48% at 22% 32%, #ffd6c4 0%, transparent 70%),
+    radial-gradient(34% 44% at 78% 22%, #ffe8c2 0%, transparent 70%),
+    radial-gradient(30% 40% at 56% 62%, #ffe1d6 0%, transparent 70%);
+  filter: blur(70px);
+  animation: var(--animate-aurora);
+  will-change: transform;
+}
+
+.grid-lines {
+  background-image:
+    linear-gradient(to right, rgb(16 17 20 / 0.055) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(16 17 20 / 0.055) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(ellipse 75% 62% at 50% 28%, #000 20%, transparent 78%);
+}
+
+.grid-lines-dark {
+  background-image:
+    linear-gradient(to right, rgb(255 255 255 / 0.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(255 255 255 / 0.05) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 40%, #000 10%, transparent 75%);
+}
+
+.noise::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.05;
+  mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.mask-fade-x {
+  mask-image: linear-gradient(to right, transparent, #000 12%, #000 88%, transparent);
+}
+
+.spotlight::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 300ms ease;
+  background: radial-gradient(
+    440px circle at var(--mx, 50%) var(--my, 0%),
+    rgb(224 89 52 / 0.1),
+    transparent 62%
+  );
+}
+
+.spotlight-dark::before {
+  background: radial-gradient(
+    440px circle at var(--mx, 50%) var(--my, 0%),
+    rgb(240 138 98 / 0.16),
+    transparent 62%
+  );
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .spotlight:hover::before {
+    opacity: 1;
+  }
+  .marquee:hover .marquee-track {
+    animation-play-state: paused;
+  }
+}
+
+.pulse-dash {
+  stroke-dasharray: 0.09 0.91;
+  animation: var(--animate-dash);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aurora,
+  .pulse-dash,
+  .marquee-track {
+    animation: none !important;
+  }
+  .pulse-dash {
+    display: none;
+  }
+}
+
+.accent-underline {
+  background-image: linear-gradient(to right, rgb(224 89 52 / 0.45), rgb(224 89 52 / 0.15));
+  background-repeat: no-repeat;
+  background-size: 100% 2px;
+  background-position: 0 96%;
+}
