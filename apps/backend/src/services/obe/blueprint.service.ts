@@ -1,6 +1,7 @@
 import prisma from '../../config/prisma';
 import { ApiError } from '../../api/common/errors';
 import type { BloomLevel, BlueprintItemType } from '@prisma/client';
+import { BlueprintValidationService } from './blueprint-validation.service';
 
 export class BlueprintService {
   static async createBlueprint(data: {
@@ -191,64 +192,7 @@ export class BlueprintService {
     totalMarks: number;
     items: Array<{ marks: number; count: number; coId: string; bloomLevel: string }>;
   }) {
-    const issues: Array<{ type: string; message: string; severity: 'error' | 'warning' }> = [];
-
-    const totalItemMarks = blueprint.items.reduce(
-      (sum, item) => sum + item.marks * item.count,
-      0
-    );
-
-    if (totalItemMarks !== blueprint.totalMarks) {
-      issues.push({
-        type: 'TOTAL_MISMATCH',
-        message: `Blueprint item marks (${totalItemMarks}) do not match total marks (${blueprint.totalMarks})`,
-        severity: 'error',
-      });
-    }
-
-    if (blueprint.items.length === 0) {
-      issues.push({
-        type: 'NO_ITEMS',
-        message: 'Blueprint has no items',
-        severity: 'error',
-      });
-      return { valid: false, issues, totalItemMarks, coCoverage: 0, bloomDistribution: {} };
-    }
-
-    const coMarksMap = new Map<string, number>();
-    const bloomMap = new Map<string, number>();
-
-    for (const item of blueprint.items) {
-      const itemTotal = item.marks * item.count;
-      coMarksMap.set(item.coId, (coMarksMap.get(item.coId) ?? 0) + itemTotal);
-      bloomMap.set(item.bloomLevel, (bloomMap.get(item.bloomLevel) ?? 0) + itemTotal);
-    }
-
-    const maxCoMarks = Math.max(...Array.from(coMarksMap.values()));
-    const coMarksRatio = maxCoMarks / blueprint.totalMarks;
-    if (coMarksRatio > 0.4) {
-      issues.push({
-        type: 'CO_CONCENTRATION',
-        message: `A single CO accounts for ${Math.round(coMarksRatio * 100)}% of total marks (max 40%)`,
-        severity: 'warning',
-      });
-    }
-
-    if (bloomMap.size === 1 && blueprint.items.length > 1) {
-      issues.push({
-        type: 'SINGLE_BLOOM',
-        message: 'All items target the same Bloom level — consider diversifying',
-        severity: 'warning',
-      });
-    }
-
-    return {
-      valid: !issues.some((i) => i.severity === 'error'),
-      issues,
-      totalItemMarks,
-      coCoverage: coMarksMap.size,
-      bloomDistribution: Object.fromEntries(bloomMap),
-    };
+    return BlueprintValidationService.validateBlueprintItems(blueprint);
   }
 
   static async validateBlueprintById(blueprintId: string, organizationId: string) {
