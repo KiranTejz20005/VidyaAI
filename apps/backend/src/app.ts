@@ -1,6 +1,7 @@
 // Restart trigger comment
 import 'express-async-errors';
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
+import fs from 'fs';
 import path from 'path';
 import cookieParser from 'cookie-parser';
 import http from 'http';
@@ -19,13 +20,23 @@ import { initializeSocketServer, getSocketServer } from './sockets/socket.server
 import { createAiGenerationWorker, getActiveAiJobCount, getStalledAiJobCount, getAiWorker } from './workers/aiGeneration.worker';
 import { createPdfWorker, getPdfWorker } from './workers/pdf.worker';
 import prisma from './config/prisma';
-import { getIngestionWorker } from './workers/ingestion.worker';
+import { createIngestionWorker, getIngestionWorker } from './workers/ingestion.worker';
+import { createAssessmentWorker, getAssessmentWorker } from './workers/assessment.worker';
+import { authenticate } from './middlewares/auth.middleware';
+import { verifyAccessToken } from './services/auth.service';
 import { emitToAssignment } from './sockets/socket.server';
 import apiRouter from './routes';
 import { errorMiddleware } from './middlewares/error.middleware';
 import { logger } from './utils/logger';
 import { AuditService } from './services/audit.service';
 import { globalIpRateLimiter } from './middlewares/rate-limit.middleware';
+import { resolveUploadPath, UnsafePathError } from './utils/safe-path';
+import { normalizeRole } from './security/request-context';
+import {
+  StorageRbacService,
+  StorageUserContext,
+  effectiveOrgId,
+} from './services/storage/storage-rbac.service';
 
 // ── Bootstrap phase tracking ──
 let isBootstrapping = false;
@@ -57,6 +68,125 @@ process.on('unhandledRejection', (reason) => {
   if (reason instanceof Error && reason.stack) logger.error(reason.stack);
   process.exit(1);
 });
+
+function buildStorageUserContext(req: Request): StorageUserContext | null {
+  const user = req.user;
+  if (!user?.id) return null;
+  const role = normalizeRole(user.role);
+  const orgId = role === 'SUPER_ADMIN'
+    ? user.activeOrganizationId || user.organizationId
+    : user.organizationId || user.activeOrganizationId;
+  return {
+    id: user.id,
+    role,
+    organizationId: effectiveOrgId(orgId),
+    email: user.email ?? null,
+  };
+}
+
+async function findStoredFileForLocalPath(relativePath: string) {
+  const normalized = relativePath.replace(/\\/g, '/').replace(/^\/+/, '');
+  const basename = path.posix.basename(normalized);
+  const candidates = Array.from(new Set([normalized, `uploads/${normalized}`, basename]));
+  const exact = await prisma.storedFile.findFirst({
+    where: { OR: candidates.map((key) => ({ key })) },
+  });
+  if (exact) return exact;
+  return prisma.storedFile.findFirst({
+    where: {
+      OR: [
+        { key: { endsWith: `/${basename}` } },
+        { key: { endsWith: `-${basename}` } },
+      ],
+    },
+  });
+}
+
+async function canAccessLegacyLocalUpload(user: StorageUserContext, publicUrl: string): Promise<boolean> {
+  const role = normalizeRole(user.role);
+  if (role === 'SUPER_ADMIN') return true;
+
+  const userOrg = effectiveOrgId(user.organizationId);
+  if (!userOrg) return false;
+
+  const library = await prisma.libraryResource.findFirst({ where: { fileUrl: publicUrl } });
+  if (library) {
+    return library.organizationId === userOrg;
+  }
+
+  const submission = await prisma.studentSubmission.findFirst({ where: { fileUrl: publicUrl } });
+  if (submission) {
+    if (submission.organizationId !== userOrg) return false;
+    if (submission.studentId === user.id) return true;
+    return role === 'ADMIN' || role === 'TEACHER';
+  }
+
+  return false;
+}
+
+function applySecureDownloadHeaders(res: Response): void {
+  res.setHeader('Content-Disposition', 'attachment');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'private, no-store');
+}
+
+function createSecureLocalUploadsHandler(uploadRoot: string) {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const user = buildStorageUserContext(req);
+      if (!user) {
+        res.status(401).json({ success: false, error: 'Authentication required', code: 'UNAUTHORIZED' });
+        return;
+      }
+
+      const relativePath = (req.path || '/').replace(/^\/+/, '');
+      if (!relativePath || relativePath.includes('\0')) {
+        res.status(400).json({ success: false, error: 'Invalid path' });
+        return;
+      }
+
+      let absolutePath: string;
+      try {
+        absolutePath = resolveUploadPath(`/uploads/${relativePath}`, uploadRoot);
+      } catch (err) {
+        if (err instanceof UnsafePathError) {
+          res.status(400).json({ success: false, error: 'Invalid path' });
+          return;
+        }
+        throw err;
+      }
+
+      if (!fs.existsSync(absolutePath) || fs.statSync(absolutePath).isDirectory()) {
+        res.status(404).json({ success: false, error: 'File not found' });
+        return;
+      }
+
+      const publicUrl = `/uploads/${relativePath.replace(/\\/g, '/')}`;
+      const storedFile = await findStoredFileForLocalPath(relativePath);
+
+      if (storedFile) {
+        const allowed = await StorageRbacService.canAccessFile(user, 'file:read', storedFile);
+        if (!allowed) {
+          res.status(403).json({ success: false, error: 'You do not have permission to access this file' });
+          return;
+        }
+      } else {
+        const allowed = await canAccessLegacyLocalUpload(user, publicUrl);
+        if (!allowed) {
+          res.status(403).json({ success: false, error: 'You do not have permission to access this file' });
+          return;
+        }
+      }
+
+      applySecureDownloadHeaders(res);
+      res.sendFile(absolutePath, (err) => {
+        if (err) next(err);
+      });
+    } catch (err) {
+      next(err);
+    }
+  };
+}
 
 function parseCorsOrigins(raw?: string): string[] {
   const origins = new Set<string>([
@@ -172,10 +302,11 @@ async function initializeWorkers() {
     healthState.bullmqRedis = 'connecting';
     createAiGenerationWorker();
     createPdfWorker();
-    import('./workers/ingestion.worker');
+    createIngestionWorker();
+    createAssessmentWorker();
     healthState.bullmqRedis = 'connected';
     healthState.workers = 'running';
-    logger.info('[WORKERS] AI + PDF + Ingestion workers created');
+    logger.info('[WORKERS] AI + PDF + Ingestion + Assessment workers created');
 
     const bullConnection = getBullRedisClient();
     generationQueueEvents = new QueueEvents('generation', {
@@ -338,7 +469,18 @@ function createApp() {
 
   const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: process.env.NODE_ENV === 'development' ? 5000 : 100,
+    max: process.env.NODE_ENV === 'development' ? 20000 : 3000,
+    keyGenerator: (req) => {
+      const header = req.headers.authorization;
+      if (header && header.startsWith('Bearer ')) {
+        try {
+          return `u:${verifyAccessToken(header.slice(7).trim()).userId}`;
+        } catch {
+          // fall through to the IP key
+        }
+      }
+      return `ip:${req.ip}`;
+    },
     standardHeaders: true,
     legacyHeaders: false,
     message: { success: false, error: 'Too many requests, please try again later.' },
@@ -347,16 +489,10 @@ function createApp() {
   app.use('/api', limiter);
 
   const uploadsDir = path.resolve(process.cwd(), 'uploads');
-  const staticUploadsOptions = {
-    setHeaders: (res: express.Response) => {
-      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Cache-Control', 'public, max-age=3600');
-    },
-  };
-  app.use('/uploads', express.static(uploadsDir, staticUploadsOptions));
-  app.use('/api/uploads', express.static(uploadsDir, staticUploadsOptions));
-  app.use('/api/v1/uploads', express.static(uploadsDir, staticUploadsOptions));
+  const secureLocalUploads = createSecureLocalUploadsHandler(uploadsDir);
+  // Local upload files: authenticated + tenant/ownership checks via StoredFile RBAC
+  // (legacy library/submission URLs when no StoredFile row matches the path).
+  app.use(['/uploads', '/api/uploads', '/api/v1/uploads'], authenticate, secureLocalUploads);
 
   app.use('/api', apiRouter);
 
@@ -490,6 +626,7 @@ async function bootstrap() {
 
     const io = getSocketServer();
     io.close();
+    const httpClosed = new Promise<void>((resolve) => httpServer.close(() => resolve()));
 
     if (generationQueueEvents) { await generationQueueEvents.close().catch(() => {}); generationQueueEvents = null; }
     if (pdfQueueEvents) { await pdfQueueEvents.close().catch(() => {}); pdfQueueEvents = null; }
@@ -500,13 +637,13 @@ async function bootstrap() {
     if (pdfWorker) { await pdfWorker.close().catch(() => {}); }
     const ingestionWorker = getIngestionWorker();
     if (ingestionWorker) { await ingestionWorker.close().catch(() => {}); }
+    const assessmentWorker = getAssessmentWorker();
+    if (assessmentWorker) { await assessmentWorker.close().catch(() => {}); }
 
+    await httpClosed;
+    logger.info('[SHUTDOWN] HTTP server closed');
     await Promise.allSettled([closeRedis(), closeBullRedis()]);
-
-    httpServer.close(() => {
-      logger.info('[SHUTDOWN] HTTP server closed');
-      process.exit(0);
-    });
+    process.exit(0);
     setTimeout(() => {
       logger.warn('[SHUTDOWN] Timed out — forcing exit');
       process.exit(1);

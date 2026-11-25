@@ -1,29 +1,51 @@
-import { Server as SocketIOServer } from 'socket.io';
+import { Server as SocketIOServer, type Socket } from 'socket.io';
 import type { Server as HTTPServer } from 'http';
-import type { ServerToClientEvents, ClientToServerEvents } from '../types/socket.types';
+import type {
+  ServerToClientEvents,
+  ClientToServerEvents,
+  SocketData,
+} from '../types/socket.types';
 import { env } from '../config/env';
+import prisma from '../config/prisma';
 import { logger } from '../utils/logger';
 
 // Managers
 import { ConnectionManager } from './managers/ConnectionManager';
 import { RoomManager } from './managers/RoomManager';
-import { PresenceManager } from './managers/PresenceManager';
+import { PresenceManager, orgRoom } from './managers/PresenceManager';
 import { MessageManager } from './managers/MessageManager';
 import { registerTutorSocketHandlers } from './tutor.socket';
+import { createSocketAuthMiddleware } from './socket-auth';
+import { isUuid, SOCKET_LIMITS, TokenBucket } from './socket-guards';
 
-let io: SocketIOServer<ClientToServerEvents, ServerToClientEvents> | null = null;
+type AppServer = SocketIOServer<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketData>;
+type AppSocket = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketData>;
+
+let io: AppServer | null = null;
 let connectionManager: ConnectionManager | null = null;
 let roomManager: RoomManager | null = null;
 let presenceManager: PresenceManager | null = null;
 let messageManager: MessageManager | null = null;
 
-const ASSIGNMENT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const SUBSCRIBE_WINDOW_MS = 10_000;
-const MAX_SUBSCRIBES_PER_WINDOW = 30;
-const MAX_ROOMS_PER_SOCKET = 50;
-
-function isValidAssignmentId(value: unknown): value is string {
-  return typeof value === 'string' && ASSIGNMENT_ID_RE.test(value.trim());
+/**
+ * Whether the authenticated socket user may receive realtime events for an
+ * assignment: the assignment must belong to the user's organization (a
+ * SUPER_ADMIN without a selected organization may watch any assignment).
+ */
+export async function canSubscribeToAssignment(
+  user: { role: string; organizationId: string | null },
+  assignmentId: string
+): Promise<boolean> {
+  if (!user.organizationId) {
+    if (user.role !== 'SUPER_ADMIN') return false;
+    const exists = await prisma.assignment.findFirst({ where: { id: assignmentId }, select: { id: true } });
+    return Boolean(exists);
+  }
+  const assignment = await prisma.assignment.findFirst({
+    where: { id: assignmentId, organizationId: user.organizationId },
+    select: { id: true },
+  });
+  return Boolean(assignment);
 }
 
 function parseOrigins(raw?: string): string[] {
@@ -93,7 +115,7 @@ export function initializeSocketServer(
     ...(env.SOCKET_CORS_ORIGIN ? parseOrigins(env.SOCKET_CORS_ORIGIN) : parseOrigins(env.FRONTEND_URL)),
   ];
 
-  io = new SocketIOServer<ClientToServerEvents, ServerToClientEvents>(httpServer, {
+  io = new SocketIOServer<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketData>(httpServer, {
     cors: {
       origin: (origin, callback) => {
         // Browsers always send Origin on CORS requests. A missing Origin means a
@@ -108,7 +130,7 @@ export function initializeSocketServer(
     transports: ['websocket', 'polling'],
     pingTimeout: 30000,
     pingInterval: 12000,
-    maxHttpBufferSize: 1e6,
+    maxHttpBufferSize: SOCKET_LIMITS.maxHttpBufferSize,
     allowUpgrades: true,
     cookie: {
       name: 'vidyaai-socket',
@@ -124,94 +146,95 @@ export function initializeSocketServer(
   presenceManager = new PresenceManager(io);
   messageManager = new MessageManager(io);
 
-  io.on('connection', (socket) => {
-    logger.debug(`Socket connected: ${socket.id} (transport: ${socket.conn.transport.name})`);
-    
-    // Rate Limiting Logic for assignments
-    let subscribeCount = 0;
-    let windowStart = Date.now();
+  // Every connection must present a valid access token. The verified identity
+  // lives on socket.data.user and cannot be changed by anything the client emits.
+  io.use(
+    createSocketAuthMiddleware({
+      canAcceptConnection: (userId) =>
+        (connectionManager?.getConnectionCount(userId) ?? 0) < SOCKET_LIMITS.maxConnectionsPerUser,
+    })
+  );
 
-    const canSubscribe = (): boolean => {
-      const now = Date.now();
-      if (now - windowStart > SUBSCRIBE_WINDOW_MS) {
-        windowStart = now;
-        subscribeCount = 0;
+  io.on('connection', (socket) => {
+    const user = socket.data.user;
+    if (!user) {
+      socket.disconnect(true);
+      return;
+    }
+    logger.debug(`Socket connected: ${socket.id} (transport: ${socket.conn.transport.name})`);
+
+    const wasAlreadyConnected = connectionManager!.isUserConnected(user.id);
+    connectionManager!.handleConnection(socket, user.id);
+    if (!wasAlreadyConnected) presenceManager!.markOnline(user.id, user.organizationId);
+
+    // General per-socket event budget; persistent abusers are disconnected.
+    const budget = new TokenBucket(SOCKET_LIMITS.eventBurst, SOCKET_LIMITS.eventRefillPerSecond);
+    let dropped = 0;
+    const allow = (): boolean => {
+      if (budget.tryRemove()) return true;
+      dropped += 1;
+      if (dropped > SOCKET_LIMITS.maxDroppedEventsBeforeDisconnect) {
+        logger.warn(`Socket ${socket.id} exceeded event budget and was disconnected`);
+        socket.disconnect(true);
       }
-      subscribeCount += 1;
-      return subscribeCount <= MAX_SUBSCRIBES_PER_WINDOW;
+      return false;
     };
 
-    socket.on('subscribe:assignment', ({ assignmentId }) => {
-      if (!canSubscribe()) {
-        logger.warn(`Socket ${socket.id} exceeded subscribe rate limit and was disconnected`);
-        socket.disconnect(true);
-        return;
-      }
-      if (!isValidAssignmentId(assignmentId)) {
-        logger.warn(`Socket ${socket.id} attempted invalid assignment subscription: ${String(assignmentId)}`);
-        return;
-      }
-      if (socket.rooms.size > MAX_ROOMS_PER_SOCKET) {
+    socket.on('subscribe:assignment', async ({ assignmentId } = {} as { assignmentId: string }) => {
+      if (!allow()) return;
+      if (!isUuid(assignmentId)) return;
+      if (socket.rooms.size > SOCKET_LIMITS.maxRoomsPerSocket) {
         logger.warn(`Socket ${socket.id} exceeded room cap and was disconnected`);
         socket.disconnect(true);
         return;
       }
-      socket.join(`assignment:${assignmentId.trim()}`);
-    });
-
-    socket.on('unsubscribe:assignment', ({ assignmentId }) => {
-      if (!isValidAssignmentId(assignmentId)) return;
-      socket.leave(`assignment:${assignmentId.trim()}`);
-    });
-
-    // --- Real-time Group Chat & Presence ---
-    
-    socket.on('authenticate', ({ userId }) => {
-      if (!userId) return;
-      const wasAlreadyConnected = connectionManager!.isUserConnected(userId);
-      
-      connectionManager!.handleConnection(socket, userId);
-      
-      // If it's a completely new connection for this user across all tabs
-      if (!wasAlreadyConnected) {
-        presenceManager!.markOnline(userId);
+      try {
+        if (!(await canSubscribeToAssignment(user, assignmentId.trim()))) {
+          logger.warn(`Socket ${socket.id} (user ${user.id}) denied assignment subscription`);
+          return;
+        }
+        socket.join(`assignment:${assignmentId.trim()}`);
+      } catch (err) {
+        logger.warn({ err }, '[SOCKET] Assignment access check failed');
       }
     });
 
-    socket.on('join:group', ({ groupId }) => {
-      roomManager!.joinRoom(socket, groupId);
-      // Let the newly joined socket know who else is online in this room right now
-      // (Optimization: In a massive scale app, we'd query Redis. Here, we just query RoomManager + ConnectionManager)
+    socket.on('unsubscribe:assignment', ({ assignmentId } = {} as { assignmentId: string }) => {
+      if (!allow() || !isUuid(assignmentId)) return;
+      socket.leave(`assignment:${assignmentId.trim()}`);
+    });
+
+    socket.on('join:group', async ({ groupId } = {} as { groupId: string }) => {
+      if (!allow()) return;
+      const joined = await roomManager!.joinRoom(socket, groupId);
+      if (!joined) return;
       const userIdsInRoom = roomManager!.getUsersInRoom(groupId);
-      const onlineUserIds = userIdsInRoom.filter(id => connectionManager!.isUserConnected(id));
-      
+      const onlineUserIds = userIdsInRoom.filter((id) => connectionManager!.isUserConnected(id));
       socket.emit('presence:sync', { onlineUserIds });
     });
 
-    socket.on('leave:group', ({ groupId }) => {
+    socket.on('leave:group', ({ groupId } = {} as { groupId: string }) => {
+      if (!allow()) return;
       roomManager!.leaveRoom(socket, groupId);
     });
 
     socket.on('chat:send_message', (payload) => {
-      messageManager!.handleSendMessage(socket, payload);
+      if (!allow()) return;
+      void messageManager!.handleSendMessage(socket, payload);
     });
 
     socket.on('typing', (payload) => {
+      if (!allow()) return;
       messageManager!.handleTyping(socket, payload);
     });
 
     registerTutorSocketHandlers(socket);
 
     socket.on('disconnect', (reason) => {
-      const userId = socket.data.userId;
-      if (userId) {
-        connectionManager!.handleDisconnect(socket);
-        
-        // If this was the last active socket for this user, they are truly offline
-        if (!connectionManager!.isUserConnected(userId)) {
-          presenceManager!.markOffline(userId);
-        }
-      }
+      connectionManager!.handleDisconnect(socket);
+      presenceManager!.markOffline(user.id, user.organizationId, () =>
+        connectionManager!.isUserConnected(user.id)
+      );
       logger.debug(`Socket disconnected: ${socket.id} (${reason})`);
     });
   });

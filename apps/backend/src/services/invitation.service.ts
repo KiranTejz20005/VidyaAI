@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { logger } from '../utils/logger';
 import { sendInvitationEmail } from './email.service';
 import { SystemRole } from '@prisma/client';
+import { hashOpaqueToken } from '../security/credentials';
 
 export const createInvitation = async ({
   email,
@@ -28,6 +29,7 @@ export const createInvitation = async ({
       data: { status: 'CANCELLED' }
     });
 
+    // Only the SHA-256 digest is stored; the raw token exists solely in the emailed link.
     const token = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 7); // 7 days expiry
@@ -37,25 +39,26 @@ export const createInvitation = async ({
         email,
         role,
         organizationId,
-        token,
+        token: hashOpaqueToken(token),
         expiresAt,
         createdById,
         status: 'PENDING'
       }
     });
 
-    // Send Email
-    await sendInvitationEmail(email, role, token);
+    const emailSent = await sendInvitationEmail(email, role, token);
 
-    return invitation;
+    // Never return the stored digest; callers get delivery status instead.
+    const { token: _digest, ...safeInvitation } = invitation;
+    return { ...safeInvitation, emailSent };
   } catch (error) {
-    logger.error(`[createInvitation] Failed: ${error}`);
+    logger.error({ err: error }, '[createInvitation] Failed');
     throw error;
   }
 };
 
 export const validateInvitationToken = async (token: string) => {
-  const invitation = await prisma.invitation.findUnique({ where: { token } });
+  const invitation = await prisma.invitation.findUnique({ where: { token: hashOpaqueToken(token) } });
   if (!invitation) throw new Error('Invalid invitation token.');
   
   if (invitation.status !== 'PENDING') {

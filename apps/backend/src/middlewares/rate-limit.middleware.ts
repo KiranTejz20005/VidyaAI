@@ -303,12 +303,12 @@ export const globalIpRateLimiter = async (
   const ipKey = `limit:global:ip:${ip}:minute`;
   
   try {
-    const ipCheck = await checkLimit(ipKey, 60, 60);
+    const ipCheck = await checkLimit(ipKey, 600, 60);
     if (!ipCheck.allowed) {
       logger.warn({
         action: 'Global Rate Limit Triggered',
         ip,
-        limitType: 'IP_GLOBAL_60RPM',
+        limitType: 'IP_GLOBAL_600RPM',
       });
       res.setHeader('Retry-After', '60');
       res.status(429).json({ success: false, error: 'Too many requests. Global IP rate limit exceeded.', retryAfter: 60 });

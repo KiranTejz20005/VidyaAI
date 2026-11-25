@@ -1,23 +1,26 @@
 import { z } from 'zod';
+import { passwordPolicySchema } from '../../security/credentials';
+
+const email = z.string().trim().toLowerCase().email().max(254);
+
+const strongPassword = passwordPolicySchema;
 
 export const signupSchema = z.object({
   body: z.object({
-    email: z.string().email().transform((e) => e.trim().toLowerCase()),
-    password: z
-      .string()
-      .min(8, 'Password must be at least 8 characters')
-      .regex(/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/, 'Password must contain at least one uppercase letter, one lowercase letter, and one number'),
+    email,
+    password: strongPassword,
     firstName: z.string().min(1).max(100).transform((s) => s.trim()),
     lastName: z.string().min(1).max(100).transform((s) => s.trim()),
+    // Joining an existing organization requires an invitation (POST /auth/accept-invite);
+    // self-service signups never receive tenant membership.
     role: z.enum(['STUDENT', 'TEACHER']).optional().default('TEACHER'),
-    organizationId: z.string().uuid().optional(),
   }),
 });
 
 export const loginSchema = z.object({
   body: z.object({
-    email: z.string().email().transform((e) => e.trim().toLowerCase()),
-    password: z.string().min(1, 'Password is required'),
+    email,
+    password: z.string().min(1, 'Password is required').max(128),
   }),
 });
 
@@ -27,33 +30,23 @@ export const refreshSchema = z.object({
   }),
 });
 
-export const ssoSchema = z.object({
-  body: z.object({
-    email: z.string().email().transform((e) => e.trim().toLowerCase()),
-    firstName: z.string().optional(),
-    lastName: z.string().optional(),
-    provider: z.string().min(1),
-  }),
-});
-
 export const acceptInviteSchema = z.object({
   body: z.object({
-    token: z.string().min(1, 'Token is required'),
-    password: z
-      .string()
-      .min(8, 'Password must be at least 8 characters')
-      .regex(/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/, 'Password must contain at least one uppercase letter, one lowercase letter, and one number'),
-    firstName: z.string().min(1).max(100),
-    lastName: z.string().min(1).max(100),
+    token: z.string().min(1, 'Token is required').max(256),
+    password: strongPassword,
+    firstName: z.string().trim().min(1).max(100),
+    lastName: z.string().trim().min(1).max(100),
   }),
 });
 
 export const updateProfileSchema = z.object({
   body: z.object({
-    firstName: z.string().min(1).max(100).optional(),
-    lastName: z.string().min(1).max(100).optional(),
-    email: z.string().email().optional(),
-    avatar: z.string().nullable().optional(),
+    firstName: z.string().trim().min(1).max(100).optional(),
+    lastName: z.string().trim().min(1).max(100).optional(),
+    email: email.optional(),
+    // Required to change the email address of a password account.
+    currentPassword: z.string().max(128).optional(),
+    avatar: z.string().max(500_000).nullable().optional(),
   }),
 });
 
@@ -65,11 +58,8 @@ export const updatePreferencesSchema = z.object({
 
 export const changePasswordSchema = z.object({
   body: z.object({
-    currentPassword: z.string().min(1, 'Current password is required'),
-    newPassword: z
-      .string()
-      .min(8, 'New password must be at least 8 characters')
-      .regex(/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/, 'New password must contain at least one uppercase letter, one lowercase letter, and one number'),
+    currentPassword: z.string().min(1, 'Current password is required').max(128),
+    newPassword: strongPassword,
   }),
 });
 
@@ -82,5 +72,24 @@ export const switchOrganizationSchema = z.object({
 export const sessionIdParamSchema = z.object({
   params: z.object({
     id: z.string().uuid('Valid session ID is required'),
+  }),
+});
+
+export const googleSigninSchema = z.object({
+  body: z.object({
+    token: z.string().min(20).max(4096),
+    role: z.enum(['STUDENT', 'TEACHER', 'FACULTY', 'ADMIN', 'SUPER_ADMIN']),
+    isSignUp: z.boolean().optional().default(false),
+  }),
+});
+
+export const forgotPasswordSchema = z.object({
+  body: z.object({ email }),
+});
+
+export const resetPasswordSchema = z.object({
+  body: z.object({
+    token: z.string().min(32).max(256),
+    newPassword: strongPassword,
   }),
 });

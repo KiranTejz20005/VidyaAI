@@ -14,56 +14,96 @@ declare global {
         activeOrganizationId?: string | null;
         departmentId?: string | null;
       };
+      /**
+       * Server-side authorization decisions made by middleware. Lives on the
+       * request object (not req.body) so clients can never forge it.
+       */
+      authScope?: {
+        requireOwnership?: boolean;
+        organizationId?: string;
+      };
     }
   }
 }
 
 /**
- * Authentication middleware that validates JWT token from Authorization header or cookie.
+ * Sentinel organization for accounts without one. It never matches a real
+ * tenant, so `where: { organizationId }` filters stay restrictive instead of
+ * collapsing to `undefined` (which Prisma treats as "no filter").
+ */
+export const NO_ORGANIZATION_ID = '00000000-0000-0000-0000-000000000000';
+
+/** Endpoints usable while a temporary password is still in force. */
+const PASSWORD_RESET_ALLOWED_PATHS = ['/auth/me', '/auth/me/password', '/auth/logout', '/auth/refresh'];
+
+function extractBearerToken(req: Request): string | undefined {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    return authHeader.substring(7).trim() || undefined;
+  }
+  const cookieToken = req.cookies?.access_token;
+  return typeof cookieToken === 'string' && cookieToken.length > 0 ? cookieToken : undefined;
+}
+
+/**
+ * Validates the access token from the Authorization header or the
+ * `access_token` cookie. Tokens are deliberately not accepted from the query
+ * string: URLs end up in access logs, browser history and Referer headers.
  */
 export const authenticate = (req: Request, res: Response, next: NextFunction) => {
+  const token = extractBearerToken(req);
+  if (!token) {
+    return res.status(401).json({ success: false, error: 'Authentication required', code: 'UNAUTHORIZED' });
+  }
+
   try {
-    let token = '';
-
-    // 1. Extract from Authorization header
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      token = authHeader.substring(7);
-    }
-
-    // 2. Extract from cookie
-    if (!token && req.cookies && req.cookies.access_token) {
-      token = req.cookies.access_token;
-    }
-
-    // 3. Extract from query parameter (for direct file downloads/views)
-    if (!token && req.query && req.query.token) {
-      token = req.query.token as string;
-    }
-
-    if (!token) {
-      return res.status(401).json({ success: false, error: 'Authentication required' });
-    }
-
-    // Token exists, verify it
     const decodedPayload = verifyAccessToken(token);
-
     req.user = {
       id: decodedPayload.userId,
       email: decodedPayload.email,
       role: decodedPayload.role,
-      organizationId: decodedPayload.organizationId || '00000000-0000-0000-0000-000000000000',
+      organizationId: decodedPayload.organizationId || NO_ORGANIZATION_ID,
       activeOrganizationId: decodedPayload.activeOrganizationId,
       departmentId: decodedPayload.departmentId,
     };
+    if (decodedPayload.forcePasswordReset) {
+      const path = req.originalUrl.split('?')[0];
+      if (!PASSWORD_RESET_ALLOWED_PATHS.some((p) => path.endsWith(p))) {
+        return res.status(403).json({
+          success: false,
+          error: 'You must set a new password before continuing',
+          code: 'PASSWORD_RESET_REQUIRED',
+        });
+      }
+    }
     return next();
-  } catch (err: any) {
-    return res.status(401).json({ success: false, error: err.message || 'Invalid authentication credentials' });
+  } catch (err) {
+    const expired = err instanceof Error && err.message === 'Access token has expired';
+    return res.status(401).json({
+      success: false,
+      error: expired ? 'Access token has expired' : 'Invalid authentication credentials',
+      code: expired ? 'TOKEN_EXPIRED' : 'UNAUTHORIZED',
+    });
   }
 };
 
 /**
- * Middleware to enforce ownership or admin overrides
+ * Removes underscore-prefixed control keys from the JSON body. Older code
+ * passed authorization flags through req.body; stripping them guarantees a
+ * client can never inject such a flag.
+ */
+export const stripReservedBodyKeys = (req: Request, _res: Response, next: NextFunction) => {
+  if (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) {
+    for (const key of Object.keys(req.body)) {
+      if (key.startsWith('_require')) delete req.body[key];
+    }
+  }
+  next();
+};
+
+/**
+ * Marks the request so controllers restrict non-admin callers to resources
+ * they own. Admins are not marked.
  */
 export const requireOwnership = (_resourceType: string) => {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -74,15 +114,15 @@ export const requireOwnership = (_resourceType: string) => {
     if (req.user.role === 'SUPER_ADMIN' || req.user.role === 'ADMIN') {
       return next();
     }
-    
-    // We attach a flag to the request so the controller knows to enforce ownership filtering
-    req.body._requireOwnership = true; 
+
+    req.authScope = { ...req.authScope, requireOwnership: true };
     return next();
-  }
+  };
 };
 
 /**
- * Middleware to enforce organization-level data isolation
+ * Enforces that the caller belongs to an organization and records the tenant
+ * on req.authScope for controllers to filter by.
  */
 export const requireOrganizationScope = () => {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -91,18 +131,19 @@ export const requireOrganizationScope = () => {
     }
 
     if (req.user.role === 'SUPER_ADMIN') {
+      const selected = req.user.activeOrganizationId || undefined;
+      if (selected) req.authScope = { ...req.authScope, organizationId: selected };
       return next();
     }
-    
+
     const orgId = req.user.activeOrganizationId || req.user.organizationId;
-    if (!orgId) {
+    if (!orgId || orgId === NO_ORGANIZATION_ID) {
       return res.status(403).json({ success: false, code: 'FORBIDDEN', message: 'User does not belong to an organization' });
     }
 
-    // Attach flag for controllers to filter by organization
-    req.body._requireOrganizationScope = orgId;
+    req.authScope = { ...req.authScope, organizationId: orgId };
     return next();
-  }
+  };
 };
 
 /**
@@ -118,7 +159,6 @@ export const authorize = (allowedRoles: string[]) => {
     if (role === 'ORG_ADMIN') role = 'ADMIN';
     if (role === 'FACULTY') role = 'TEACHER';
 
-    // Super Admins bypass role restrictions
     if (role === 'SUPER_ADMIN') {
       return next();
     }
@@ -134,13 +174,7 @@ export const authorize = (allowedRoles: string[]) => {
       return next();
     }
 
-    // Role is not authorized
-    logger.warn({ userId: req.user.id, role: req.user.role, normalizedRole: role, allowedRoles: normalizedAllowedRoles, url: req.originalUrl }, '[Authorize] Insufficient privileges');
-    
-    const errorMsg = process.env.NODE_ENV !== 'production' 
-      ? `Forbidden: Insufficient privileges (User role '${req.user.role}' does not match required roles: ${allowedRoles.join(', ')})`
-      : 'Forbidden: Insufficient privileges';
-      
-    return res.status(403).json({ success: false, error: errorMsg });
+    logger.warn({ userId: req.user.id, role: req.user.role, allowedRoles: normalizedAllowedRoles, url: req.originalUrl }, '[Authorize] Insufficient privileges');
+    return res.status(403).json({ success: false, error: 'Forbidden: Insufficient privileges', code: 'FORBIDDEN' });
   };
 };

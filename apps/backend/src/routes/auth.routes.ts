@@ -19,10 +19,8 @@ import {
   logout,
   completeOnboarding,
   acceptInvite,
-  ssoLogin,
-  googleSignin,
 } from '../controllers/auth.controller';
-import { authenticate } from '../middlewares/auth.middleware';
+import { authenticate, authorize } from '../middlewares/auth.middleware';
 
 const router = Router();
 
@@ -49,8 +47,6 @@ router.get('/public-organizations', asyncHandler(getPublicOrganizations));
 router.post('/signup', authLimiter, asyncHandler(signup));
 router.post('/accept-invite', authLimiter, asyncHandler(acceptInvite));
 router.post('/login', authLimiter, asyncHandler(login));
-router.post('/sso', authLimiter, asyncHandler(ssoLogin));
-router.post('/google', authLimiter, asyncHandler(googleSignin));
 router.post('/refresh', refreshLimiter, asyncHandler(refresh));
 router.post('/logout', authLimiter, asyncHandler(logout));
 
@@ -63,7 +59,7 @@ router.put('/me/profile', asyncHandler(updateProfile));
 router.put('/me/preferences', asyncHandler(updatePreferences));
 router.get('/me/organizations', asyncHandler(getAvailableOrganizations));
 router.post('/me/switch-organization', asyncHandler(switchOrganization));
-router.put('/me/organization', asyncHandler(updateOrganization));
+router.put('/me/organization', authorize(['ADMIN']), asyncHandler(updateOrganization));
 
 router.get('/me/sessions', asyncHandler(getSessions));
 router.delete('/me/sessions/:id', asyncHandler(revokeSessionById));

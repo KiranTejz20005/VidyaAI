@@ -37,16 +37,14 @@ export async function loadAssignmentScoped(
 }
 
 export async function loadAssignmentForRequest(req: Request, assignmentId: string): Promise<Assignment> {
-  const orgId = getRequestOrgId(req);
-  const bypassOrgScope = isSuperAdmin(req.user?.role) || isAdminRole(req.user?.role);
-  const assignment = await loadAssignmentScoped(assignmentId, bypassOrgScope ? undefined : orgId);
-  if (!assignment) {
-    if (!bypassOrgScope) {
-      const existsElsewhere = await prisma.assignment.findUnique({ where: { id: assignmentId } });
-      if (existsElsewhere) throw new AccessDeniedError('Assignment belongs to another organization');
-    }
-    throw new NotFoundError('Assignment not found');
-  }
+  // Only a SUPER_ADMIN may act across tenants. Org ADMINs are confined to
+  // their own organization like everyone else. A miss is always a 404 so the
+  // response does not reveal whether the id exists in another tenant.
+  const bypassOrgScope = isSuperAdmin(req.user?.role) && !getRequestOrgId(req);
+  const orgId = bypassOrgScope ? undefined : getRequestOrgId(req);
+  if (!bypassOrgScope && !orgId) throw new NotFoundError('Assignment not found');
+  const assignment = await loadAssignmentScoped(assignmentId, orgId);
+  if (!assignment) throw new NotFoundError('Assignment not found');
   return assignment;
 }
 
@@ -62,7 +60,7 @@ export function assertFacultyOwnsAssignment(req: Request, assignment: Assignment
 }
 
 export async function assertStudentEnrolledInOrg(studentId: string, organizationId: string): Promise<boolean> {
-  if (!organizationId) return true;
+  if (!organizationId) return false;
   const user = await prisma.user.findUnique({ where: { id: studentId }, select: { organizationId: true, activeOrganizationId: true } });
   if (user?.organizationId === organizationId || user?.activeOrganizationId === organizationId) return true;
 
@@ -72,10 +70,7 @@ export async function assertStudentEnrolledInOrg(studentId: string, organization
       section: { classroom: { organizationId } },
     },
   });
-  if (enrollment) return true;
-
-  if (!user?.organizationId || user.organizationId === '00000000-0000-0000-0000-000000000000') return true;
-  return false;
+  return Boolean(enrollment);
 }
 
 export async function assertStudentCanViewAssignment(req: Request, assignment: Assignment): Promise<void> {
@@ -151,7 +146,7 @@ export function assignmentListFilter(req: Request): { organizationId?: string; c
   const orgId = getRequestOrgId(req);
   const filter: { organizationId?: string; createdById?: string } = {};
   if (orgId) filter.organizationId = orgId;
-  if (isFacultyRole(req.user?.role) && req.body?._requireOwnership) {
+  if (isFacultyRole(req.user?.role) && req.authScope?.requireOwnership) {
     filter.createdById = getRequestUserId(req);
   }
   return filter;

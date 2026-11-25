@@ -106,22 +106,21 @@ export class BillingService {
   }
 
   static async getUsageTracking(organizationId: string) {
-    // 1. Generations: count GeneratedPaper in the database (Assignment has no direct authorId/organizationId relation)
-    const paperCount = await prisma.generatedPaper.count({});
+    const [paperCount, tokenAgg, storageAgg] = await Promise.all([
+      prisma.generatedPaper.count({ where: { organizationId } }),
+      prisma.promptExecution.aggregate({
+        where: { organizationId },
+        _sum: { tokensPrompt: true, tokensCompletion: true },
+      }),
+      prisma.storedFile.aggregate({
+        where: { organizationId },
+        _sum: { sizeBytes: true },
+      }),
+    ]);
 
-    // 2. AI Usage (Tokens)
-    const promptExecs = await prisma.promptExecution.findMany({
-      where: { organizationId },
-      select: {
-        tokensPrompt: true,
-        tokensCompletion: true,
-      },
-    });
-
-    const tokensUsed = promptExecs.reduce((acc, curr) => acc + curr.tokensPrompt + curr.tokensCompletion, 0);
-
-    // 3. Storage Usage (Mocked, since uploads path is directory and not database logged)
-    const storageUsedMb = Math.floor(Math.random() * 25) + 5; // Mock 5-30 MB
+    const tokensUsed =
+      (tokenAgg._sum.tokensPrompt ?? 0) + (tokenAgg._sum.tokensCompletion ?? 0);
+    const storageUsedMb = (storageAgg._sum.sizeBytes ?? 0) / (1024 * 1024);
 
     // 4. Plan Limits
     const sub = await this.getSubscriptionByOrganization(organizationId);
@@ -134,7 +133,7 @@ export class BillingService {
       usage: {
         generations: paperCount,
         storageMb: storageUsedMb,
-        tokens: tokensUsed || Math.floor(Math.random() * 8000) + 1200, // fallbacks for demo
+        tokens: tokensUsed,
       },
       limits: {
         generations: planConfig.maxGenerations,

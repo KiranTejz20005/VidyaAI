@@ -1,27 +1,32 @@
 import { Server as SocketIOServer } from 'socket.io';
 import { logger } from '../../utils/logger';
 
+export function orgRoom(organizationId: string): string {
+  return `org:${organizationId}`;
+}
+
 export class PresenceManager {
   private io: SocketIOServer;
 
   // We rely on the ConnectionManager to ensure uniqueness.
-  // This manager simply broadcasts presence states.
+  // This manager broadcasts presence states, confined to the user's organization.
   constructor(io: SocketIOServer) {
     this.io = io;
   }
 
-  markOnline(userId: string) {
+  markOnline(userId: string, organizationId: string | null) {
+    if (!organizationId) return;
     logger.debug(`[PresenceManager] Broadcasting USER_ONLINE for ${userId}`);
-    this.io.emit('presence:online', { userId });
+    this.io.to(orgRoom(organizationId)).emit('presence:online', { userId });
   }
 
-  markOffline(userId: string) {
+  markOffline(userId: string, organizationId: string | null, isStillConnected: () => boolean = () => false) {
+    if (!organizationId) return;
     // Add a slight debounce to prevent UI flickering on temporary network drops
     setTimeout(() => {
-      // In a real clustered environment, we'd check Redis to see if they reconnected on another node.
-      // For now, we trust the ConnectionManager state (if we check it here, but we'll just emit).
+      if (isStillConnected()) return;
       logger.debug(`[PresenceManager] Broadcasting USER_OFFLINE for ${userId}`);
-      this.io.emit('presence:offline', { userId });
+      this.io.to(orgRoom(organizationId)).emit('presence:offline', { userId });
     }, 2000);
   }
 

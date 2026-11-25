@@ -1,6 +1,52 @@
+import type { OrganizationStatus } from '@prisma/client';
 import prisma from '../../config/prisma';
-
 import { hashPassword } from '../auth.service';
+import { generateTemporaryPassword } from '../../security/credentials';
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../../api/common/errors';
+import type { AdminActor } from './admin-scope';
+
+const ORGANIZATION_STATUSES: readonly OrganizationStatus[] = ['ACTIVE', 'SUSPENDED', 'TRIAL', 'EXPIRED', 'ARCHIVED'];
+
+/** Fields an organization's own ADMIN may change; everything else is SUPER_ADMIN-only. */
+const ORG_ADMIN_EDITABLE_FIELDS = ['name', 'email', 'phone', 'address'] as const;
+const SUPER_ADMIN_ONLY_FIELDS = ['code', 'status', 'adminEmail'] as const;
+
+export interface UpdateOrganizationInput {
+  name?: string;
+  code?: string;
+  email?: string | null;
+  address?: string | null;
+  phone?: string | null;
+  status?: string;
+  adminEmail?: string | null;
+}
+
+type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
+
+/**
+ * Creates the organization's ADMIN account with a one-time password. The
+ * password is returned once so the SUPER_ADMIN can deliver it out of band.
+ */
+async function createOrganizationAdmin(tx: Tx, organization: { id: string; name: string }, adminEmail: string): Promise<string> {
+  const email = adminEmail.trim().toLowerCase();
+  const existing = await tx.user.findUnique({ where: { email }, select: { id: true } });
+  if (existing) throw new ConflictError('User with this email already exists.');
+  const tempPassword = generateTemporaryPassword();
+  await tx.user.create({
+    data: {
+      email,
+      passwordHash: await hashPassword(tempPassword),
+      firstName: 'Admin',
+      lastName: organization.name,
+      role: 'ADMIN',
+      organizationId: organization.id,
+      status: 'ACTIVE',
+      forcePasswordReset: true,
+      hasCompletedOnboarding: false,
+    },
+  });
+  return tempPassword;
+}
 
 export class OrganizationService {
   static async createOrganization(data: {
@@ -11,8 +57,11 @@ export class OrganizationService {
     address?: string;
     adminEmail?: string;
   }) {
+    const codeTaken = await prisma.organization.findUnique({ where: { code: data.code }, select: { id: true } });
+    if (codeTaken) throw new ConflictError('Organization code already in use.');
+
     return prisma.$transaction(async (tx) => {
-      const org = await tx.organization.create({
+      const organization = await tx.organization.create({
         data: {
           name: data.name,
           code: data.code,
@@ -24,24 +73,8 @@ export class OrganizationService {
         },
       });
 
-      if (data.adminEmail) {
-        const defaultPasswordHash = await hashPassword('Admin@123');
-        await tx.user.create({
-          data: {
-            email: data.adminEmail,
-            passwordHash: defaultPasswordHash,
-            firstName: 'Admin',
-            lastName: org.name,
-            role: 'ADMIN',
-            organizationId: org.id,
-            status: 'ACTIVE',
-            forcePasswordReset: true,
-            hasCompletedOnboarding: false,
-          },
-        });
-      }
-
-      return org;
+      const tempPassword = data.adminEmail ? await createOrganizationAdmin(tx, organization, data.adminEmail) : null;
+      return { organization, tempPassword };
     });
   }
 
@@ -73,60 +106,66 @@ export class OrganizationService {
     });
   }
 
-  static async updateOrganization(
-    id: string,
-    data: {
-      name?: string;
-      code?: string;
-      email?: string;
-      address?: string;
-      phone?: string;
-      status?: import('@prisma/client').OrganizationStatus;
-      adminEmail?: string;
+  /**
+   * Updates an organization on behalf of `actor`. A non-super caller may only
+   * edit name/email/phone/address of its own organization. `adminEmail` never
+   * rewrites an existing account: it is a no-op when that admin already
+   * belongs to the organization, otherwise a new ADMIN is created with a
+   * one-time password that is returned once.
+   */
+  static async updateOrganization(actor: AdminActor, id: string, data: UpdateOrganizationInput) {
+    if (!actor.isSuperAdmin) {
+      if (actor.organizationId !== id) throw new NotFoundError('Organization not found');
+      const forbidden = SUPER_ADMIN_ONLY_FIELDS.filter((f) => data[f] !== undefined && data[f] !== null && data[f] !== '');
+      if (forbidden.length > 0) {
+        throw new ForbiddenError(`Only a SUPER_ADMIN can change: ${forbidden.join(', ')}`);
+      }
     }
-  ) {
+
+    const existing = await prisma.organization.findUnique({ where: { id }, select: { id: true, code: true } });
+    if (!existing) throw new NotFoundError('Organization not found');
+
+    const update: { name?: string; email?: string | null; phone?: string | null; address?: string | null; code?: string; status?: OrganizationStatus } = {};
+    if (data.name !== undefined) {
+      if (!data.name) throw new ValidationError('Organization name is required');
+      update.name = data.name;
+    }
+    for (const field of ORG_ADMIN_EDITABLE_FIELDS) {
+      if (field === 'name' || data[field] === undefined) continue;
+      update[field] = data[field] || null;
+    }
+
+    if (actor.isSuperAdmin) {
+      if (data.code && data.code !== existing.code) {
+        const codeTaken = await prisma.organization.findUnique({ where: { code: data.code }, select: { id: true } });
+        if (codeTaken) throw new ConflictError('Organization code already in use.');
+        update.code = data.code;
+      }
+      if (data.status) {
+        if (!(ORGANIZATION_STATUSES as readonly string[]).includes(data.status)) {
+          throw new ValidationError('Invalid organization status');
+        }
+        update.status = data.status as OrganizationStatus;
+      }
+    }
+
     return prisma.$transaction(async (tx) => {
-      const org = await tx.organization.update({
-        where: { id },
-        data: {
-          name: data.name,
-          code: data.code,
-          email: data.email,
-          address: data.address,
-          phone: data.phone,
-          status: data.status,
-        },
-      });
+      const organization = await tx.organization.update({ where: { id }, data: update });
 
-      if (data.adminEmail) {
-        const existingAdmin = await tx.user.findFirst({
-          where: { organizationId: id, role: 'ADMIN' },
-        });
-
-        if (existingAdmin) {
-          await tx.user.update({
-            where: { id: existingAdmin.id },
-            data: { email: data.adminEmail },
-          });
+      let tempPassword: string | null = null;
+      if (actor.isSuperAdmin && data.adminEmail) {
+        const email = data.adminEmail.trim().toLowerCase();
+        const current = await tx.user.findUnique({ where: { email }, select: { organizationId: true, role: true } });
+        if (current) {
+          if (current.organizationId !== id || current.role !== 'ADMIN') {
+            throw new ConflictError('User with this email already exists.');
+          }
         } else {
-          const defaultPasswordHash = await hashPassword('Admin@123');
-          await tx.user.create({
-            data: {
-              email: data.adminEmail,
-              passwordHash: defaultPasswordHash,
-              firstName: 'Admin',
-              lastName: org.name,
-              role: 'ADMIN',
-              organizationId: org.id,
-              status: 'ACTIVE',
-              forcePasswordReset: true,
-              hasCompletedOnboarding: false,
-            },
-          });
+          tempPassword = await createOrganizationAdmin(tx, organization, email);
         }
       }
 
-      return org;
+      return { organization, tempPassword };
     });
   }
 
@@ -188,13 +227,13 @@ export class OrganizationService {
   }
 
   static async suspendOrganization(id: string, suspend: boolean = true) {
-    if (!id) throw new Error('Organization ID is required');
+    if (!id) throw new ValidationError('Organization ID is required');
     const existing = await prisma.organization.findUnique({
       where: { id },
       select: { id: true, status: true },
     });
     if (!existing) {
-      throw new Error(`Organization with ID ${id} not found`);
+      throw new NotFoundError('Organization not found');
     }
 
     const nextStatus = suspend ? 'SUSPENDED' : 'ACTIVE';
@@ -230,17 +269,15 @@ export class OrganizationService {
       },
     });
 
-    const papersGenerated = await prisma.generatedPaper.count({
-      where: {
-        assignment: {
-          status: 'COMPLETED',
-        },
-      },
-    });
-
-    // Mock AI Usage for local demo
-    const totalTokensUsed = 1250000;
-    const estimatedCost = 3.75;
+    const [papersGenerated, aiUsage] = await Promise.all([
+      prisma.generatedPaper.count({ where: { organizationId } }),
+      prisma.promptExecution.aggregate({
+        where: { organizationId },
+        _sum: { tokensPrompt: true, tokensCompletion: true, costUsd: true },
+      }),
+    ]);
+    const totalTokensUsed = (aiUsage._sum.tokensPrompt ?? 0) + (aiUsage._sum.tokensCompletion ?? 0);
+    const estimatedCost = aiUsage._sum.costUsd ?? 0;
 
     return {
       totalUsers,

@@ -68,8 +68,22 @@ export interface GenerationPdfReadyPayload {
   ts: number;
 }
 
+/** Identity established by the Socket.IO handshake middleware from a verified access token. */
+export interface SocketUser {
+  id: string;
+  role: string;
+  organizationId: string | null;
+}
+
+export interface SocketData {
+  user?: SocketUser;
+}
+
 // --- NEW REALTIME TYPES ---
 export interface ServerToClientEvents {
+  // Identity confirmation (reply to the legacy `authenticate` event)
+  'authenticated': (payload: { userId: string }) => void;
+
   'generation:queued': (payload: GenerationQueuedPayload) => void;
   'generation:processing': (payload: GenerationProgressPayload) => void;
   'generation:progress': (payload: GenerationProgressPayload) => void;
@@ -117,8 +131,8 @@ export interface ClientToServerEvents {
   'subscribe:assignment': (data: { assignmentId: string }) => void;
   'unsubscribe:assignment': (data: { assignmentId: string }) => void;
   
-  // Connection Events
-  'authenticate': (data: { userId: string }) => void;
+  // Connection Events (legacy: identity comes from the handshake token; this only echoes it back)
+  'authenticate': (data?: { userId?: string }, ack?: (res: { userId: string }) => void) => void;
   
   // Room Events
   'join:group': (data: { groupId: string }) => void;

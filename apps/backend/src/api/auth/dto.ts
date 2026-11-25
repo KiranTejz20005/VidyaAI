@@ -61,11 +61,12 @@ export interface AuthUserResponseDto {
   departmentId?: string | null;
   hasCompletedOnboarding: boolean;
   avatar?: string | null;
+  forcePasswordReset: boolean;
 }
 
+/** The refresh token is delivered only as an httpOnly cookie, never in a body. */
 export interface AuthTokensResponseDto {
   accessToken: string;
-  refreshToken?: string;
   user: AuthUserResponseDto;
 }
 
@@ -82,6 +83,7 @@ export interface ProfileResponseDto {
   preferences: Record<string, unknown>;
   hasCompletedOnboarding: boolean;
   avatar?: string | null;
+  forcePasswordReset: boolean;
 }
 
 export interface StorageUsageResponseDto {

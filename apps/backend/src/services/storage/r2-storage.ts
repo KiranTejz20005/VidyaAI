@@ -3,6 +3,17 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { env } from '../../config/env';
 import { logger } from '../../utils/logger';
 import type { StorageAdapter } from './storage-adapter';
+import { normalizeStorageKey } from './key-generator';
+
+export interface R2PutOptions {
+  /** Stored on the object and returned on every GET (e.g. `attachment; filename=...`). */
+  contentDisposition?: string;
+}
+
+export interface R2PresignUploadOptions extends R2PutOptions {
+  /** Exact byte length the client must upload; signed into the URL. */
+  contentLength?: number;
+}
 
 export class R2StorageAdapter implements StorageAdapter {
   private client: S3Client;
@@ -45,63 +56,55 @@ export class R2StorageAdapter implements StorageAdapter {
   /**
    * Save a buffer directly to R2 and return the presigned download URL
    */
-  async save(key: string, data: Buffer | Uint8Array, contentType: string): Promise<string> {
-    const cleanKey = key.replace(/^\/+/, '');
+  async save(key: string, data: Buffer | Uint8Array, contentType: string, options: R2PutOptions = {}): Promise<string> {
+    const cleanKey = normalizeStorageKey(key);
     await this.client.send(new PutObjectCommand({
       Bucket: this.bucket,
       Key: cleanKey,
       Body: data,
       ContentType: contentType,
+      ...(options.contentDisposition ? { ContentDisposition: options.contentDisposition } : {}),
     }));
     return this.getSignedDownloadUrl(cleanKey);
   }
 
   /**
-   * Fetch object buffer directly from R2, checking standard folder prefixes if unprefixed
+   * Fetch an object by its exact key. Callers must pass the full key stored on
+   * a DB record; bare filenames are not resolved against folder prefixes.
    */
   async get(key: string): Promise<Buffer | null> {
-    const cleanKey = key.replace(/^\/+/, '');
-    const candidateKeys = [cleanKey];
-    
-    if (!cleanKey.includes('/')) {
-      candidateKeys.push(
-        `question-papers/${cleanKey}`,
-        `assignments/${cleanKey}`,
-        `quizzes/${cleanKey}`,
-        `uploads/${cleanKey}`,
-        `uploads/pdfs/${cleanKey}`,
-        `lesson-plans/${cleanKey}`
-      );
+    let cleanKey: string;
+    try {
+      cleanKey = normalizeStorageKey(key);
+    } catch {
+      logger.warn('[R2Storage] Rejected invalid object key on get');
+      return null;
     }
 
-    for (const candidate of candidateKeys) {
-      try {
-        const response = await this.client.send(new GetObjectCommand({
-          Bucket: this.bucket,
-          Key: candidate,
-        }));
-        if (!response.Body) continue;
+    try {
+      const response = await this.client.send(new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: cleanKey,
+      }));
+      if (!response.Body) return null;
 
-        const chunks: Uint8Array[] = [];
-        const stream = response.Body as any;
-        for await (const chunk of stream) {
-          chunks.push(chunk);
-        }
-        return Buffer.concat(chunks);
-      } catch {
-        // try next candidate
+      const chunks: Uint8Array[] = [];
+      const stream = response.Body as any;
+      for await (const chunk of stream) {
+        chunks.push(chunk);
       }
+      return Buffer.concat(chunks);
+    } catch {
+      logger.debug(`[R2Storage] Object not found in R2 for key=${cleanKey}`);
+      return null;
     }
-
-    logger.debug(`[R2Storage] Object not found in R2 for key=${key}`);
-    return null;
   }
 
   /**
    * Delete an object from R2
    */
   async delete(key: string): Promise<void> {
-    const cleanKey = key.replace(/^\/+/, '');
+    const cleanKey = normalizeStorageKey(key);
     try {
       await this.client.send(new DeleteObjectCommand({
         Bucket: this.bucket,
@@ -115,41 +118,38 @@ export class R2StorageAdapter implements StorageAdapter {
   }
 
   /**
-   * Check if an object exists in R2 (supporting candidate prefixes)
+   * Check whether an object exists at exactly `key`
    */
   async exists(key: string): Promise<boolean> {
-    const cleanKey = key.replace(/^\/+/, '');
-    const candidateKeys = [cleanKey];
-    if (!cleanKey.includes('/')) {
-      candidateKeys.push(
-        `question-papers/${cleanKey}`,
-        `assignments/${cleanKey}`,
-        `quizzes/${cleanKey}`,
-        `uploads/${cleanKey}`,
-        `uploads/pdfs/${cleanKey}`,
-        `lesson-plans/${cleanKey}`
-      );
+    let cleanKey: string;
+    try {
+      cleanKey = normalizeStorageKey(key);
+    } catch {
+      return false;
     }
-
-    for (const candidate of candidateKeys) {
-      try {
-        await this.client.send(new HeadObjectCommand({
-          Bucket: this.bucket,
-          Key: candidate,
-        }));
-        return true;
-      } catch {
-        // try next
-      }
+    try {
+      await this.client.send(new HeadObjectCommand({
+        Bucket: this.bucket,
+        Key: cleanKey,
+      }));
+      return true;
+    } catch {
+      return false;
     }
-    return false;
   }
 
   /**
-   * Generate pre-signed URL for direct browser uploading (default 15 minutes)
+   * Generate pre-signed URL for direct browser uploading (default 15 minutes).
+   * Content-Type, Content-Length and Content-Disposition are signed, so the
+   * client must upload exactly the declared type and size.
    */
-  async getPresignedUploadUrl(key: string, contentType: string, expiresInSeconds = 900): Promise<string> {
-    const cleanKey = key.replace(/^\/+/, '');
+  async getPresignedUploadUrl(
+    key: string,
+    contentType: string,
+    expiresInSeconds = 900,
+    options: R2PresignUploadOptions = {},
+  ): Promise<string> {
+    const cleanKey = normalizeStorageKey(key);
     const isMock = !process.env.R2_ACCOUNT_ID && !env.R2_ACCESS_KEY_ID && !env.S3_ACCESS_KEY_ID;
     if (isMock) {
       return `/api/v1/storage/upload?key=${encodeURIComponent(cleanKey)}`;
@@ -158,15 +158,24 @@ export class R2StorageAdapter implements StorageAdapter {
       Bucket: this.bucket,
       Key: cleanKey,
       ContentType: contentType,
+      ...(options.contentLength !== undefined ? { ContentLength: options.contentLength } : {}),
+      ...(options.contentDisposition ? { ContentDisposition: options.contentDisposition } : {}),
     });
-    return getSignedUrl(this.client, command, { expiresIn: expiresInSeconds });
+    return getSignedUrl(this.client, command, {
+      expiresIn: expiresInSeconds,
+      signableHeaders: new Set(['content-type', 'content-length', 'content-disposition']),
+    });
   }
 
   /**
    * Generate temporary pre-signed URL for downloading/viewing (default 15 minutes)
    */
-  async getSignedDownloadUrl(key: string, expiresInSeconds = 900): Promise<string> {
-    const cleanKey = key.replace(/^\/+/, '');
+  async getSignedDownloadUrl(
+    key: string,
+    expiresInSeconds = 900,
+    options: { responseContentType?: string; responseContentDisposition?: string } = {},
+  ): Promise<string> {
+    const cleanKey = normalizeStorageKey(key);
     const isMock = !process.env.R2_ACCOUNT_ID && !env.R2_ACCESS_KEY_ID && !env.S3_ACCESS_KEY_ID;
     if (isMock) {
       return `/api/v1/storage/by-key?key=${encodeURIComponent(cleanKey)}`;
@@ -174,6 +183,8 @@ export class R2StorageAdapter implements StorageAdapter {
     const command = new GetObjectCommand({
       Bucket: this.bucket,
       Key: cleanKey,
+      ...(options.responseContentType ? { ResponseContentType: options.responseContentType } : {}),
+      ...(options.responseContentDisposition ? { ResponseContentDisposition: options.responseContentDisposition } : {}),
     });
     return getSignedUrl(this.client, command, { expiresIn: expiresInSeconds });
   }

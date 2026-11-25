@@ -47,7 +47,15 @@ export function csrfProtection(req: Request, res: Response, next: NextFunction):
   }
 
   const headerToken = req.headers[HEADER_NAME] as string;
-  if (!headerToken || !crypto.timingSafeEqual(Buffer.from(cookieToken), Buffer.from(headerToken))) {
+  if (!headerToken) {
+    logger.warn({ ip: req.ip, method: req.method, path: req.path }, '[CSRF] Token mismatch');
+    res.status(403).json({ success: false, error: 'CSRF token mismatch' });
+    return;
+  }
+
+  const cookieBuf = Buffer.from(cookieToken);
+  const headerBuf = Buffer.from(headerToken);
+  if (cookieBuf.length !== headerBuf.length || !crypto.timingSafeEqual(cookieBuf, headerBuf)) {
     logger.warn({ ip: req.ip, method: req.method, path: req.path }, '[CSRF] Token mismatch');
     res.status(403).json({ success: false, error: 'CSRF token mismatch' });
     return;

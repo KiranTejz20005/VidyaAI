@@ -1,6 +1,5 @@
 import { Server as SocketIOServer, Socket } from 'socket.io';
 
-
 export class ConnectionManager {
   private io: SocketIOServer;
   // Maps userId to a Set of active socketIds
@@ -10,15 +9,15 @@ export class ConnectionManager {
     this.io = io;
   }
 
+  /** Registers a socket whose identity was already verified by the handshake middleware. */
   handleConnection(socket: Socket, userId: string) {
     const userSockets = this.activeUsers.get(userId) || new Set<string>();
     userSockets.add(socket.id);
     this.activeUsers.set(userId, userSockets);
-    socket.data.userId = userId;
   }
 
   handleDisconnect(socket: Socket) {
-    const userId = socket.data.userId;
+    const userId: string | undefined = socket.data.user?.id;
     if (userId) {
       const userSockets = this.activeUsers.get(userId);
       if (userSockets) {
@@ -32,6 +31,10 @@ export class ConnectionManager {
 
   isUserConnected(userId: string): boolean {
     return this.activeUsers.has(userId) && this.activeUsers.get(userId)!.size > 0;
+  }
+
+  getConnectionCount(userId: string): number {
+    return this.activeUsers.get(userId)?.size ?? 0;
   }
 
   getActiveSocketId(userId: string): string | undefined {

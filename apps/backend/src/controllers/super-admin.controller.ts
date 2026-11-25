@@ -3,6 +3,7 @@ import prisma from '../config/prisma';
 import { logger } from '../utils/logger';
 import { hashPassword } from '../services/auth.service';
 import { OrganizationService } from '../services/admin/organization.service';
+import { actorFromRequest } from '../services/admin/admin-scope';
 
 // ── CREATE ORGANIZATION ──
 export const createOrganization = async (req: Request, res: Response): Promise<void> => {
@@ -15,7 +16,7 @@ export const createOrganization = async (req: Request, res: Response): Promise<v
       return;
     }
 
-    const organization = await OrganizationService.createOrganization({
+    const { organization, tempPassword } = await OrganizationService.createOrganization({
       name,
       code,
       email,
@@ -36,7 +37,7 @@ export const createOrganization = async (req: Request, res: Response): Promise<v
       }
     });
 
-    res.status(201).json({ success: true, data: organization });
+    res.status(201).json({ success: true, data: organization, adminTempPassword: tempPassword });
   } catch (error) {
     logger.error(`[SuperAdmin - createOrganization] Error: ${error}`);
     res.status(500).json({ success: false, error: 'Failed to create organization.' });
@@ -95,7 +96,7 @@ export const getOrganizationById = async (req: Request, res: Response): Promise<
 // ── UPDATE ORGANIZATION ──
 export const updateOrganization = async (req: Request, res: Response): Promise<void> => {
   try {
-    const organization = await OrganizationService.updateOrganization(req.params.id, req.body);
+    const { organization } = await OrganizationService.updateOrganization(actorFromRequest(req), req.params.id, req.body);
 
     await prisma.auditLog.create({
       data: {

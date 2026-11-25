@@ -3,7 +3,8 @@ import prisma from '../config/prisma';
 import { logger } from '../utils/logger';
 import { OrganizationService } from '../services/admin/organization.service';
 import { DepartmentService } from '../services/admin/department.service';
-import { UserService } from '../services/admin/user.service';
+import { UserService, resolveAssignableRole, resolveTargetOrganization } from '../services/admin/user.service';
+import { actorFromRequest } from '../services/admin/admin-scope';
 import { RoleService } from '../services/admin/role.service';
 import { ClassroomService } from '../services/admin/classroom.service';
 import { GroupService } from '../services/admin/group.service';
@@ -19,6 +20,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getR2Storage } from '../services/storage/r2-storage';
 import { generateR2ObjectKey } from '../services/storage/key-generator';
+import { isRedisConnected } from '../config/redis';
 
 // ── In-Memory System Settings Store (Simulating Admin System Settings) ──
 let systemSettings = {
@@ -106,7 +108,7 @@ export class AdminController {
         res.status(403).json({ success: false, error: 'Access denied: Only SUPER_ADMIN can create organizations.' });
         return;
       }
-      const org = await OrganizationService.createOrganization(req.body);
+      const { organization: org } = await OrganizationService.createOrganization(req.body);
       // Automatically create a default subscription on creation
       await BillingService.getSubscriptionByOrganization(org.id);
       res.status(201).json({ success: true, data: org });
@@ -122,7 +124,7 @@ export class AdminController {
         res.status(403).json({ success: false, error: 'Access denied: Cannot update other organizations.' });
         return;
       }
-      const org = await OrganizationService.updateOrganization(req.params.id, req.body);
+      const org = await OrganizationService.updateOrganization(actorFromRequest(req), req.params.id, req.body);
       res.json({ success: true, data: org });
     } catch (err: any) {
       logger.error(`[Admin:updateOrganization] ${err}`);
@@ -298,7 +300,7 @@ export class AdminController {
   static async getUsers(req: Request, res: Response) {
     try {
       const orgId = getAdminOrgId(req);
-      const list = await UserService.getUsers(orgId);
+      const list = await UserService.getUsers(orgId, { skip: 0, take: 1000 });
       res.json({ success: true, data: list });
     } catch (err: any) {
       logger.error(`[Admin:getUsers] ${err}`);
@@ -391,7 +393,9 @@ export class AdminController {
         organizationId,
       };
       
-      const user = await UserService.createUser(payload);
+      const actor = actorFromRequest(req);
+      const assignedRole = resolveAssignableRole(actor, payload.role);
+      const { user } = await UserService.createUser({ ...payload, role: assignedRole, organizationId: resolveTargetOrganization(actor, assignedRole, organizationId) });
       await AuditService.logAction({
         userId: req.user?.id,
         action: 'USER_CREATION',
@@ -426,7 +430,7 @@ export class AdminController {
         res.status(403).json({ success: false, error: 'Cannot update/upgrade a user to SUPER_ADMIN' });
         return;
       }
-      const user = await UserService.updateUser(req.params.id, req.body);
+      const user = await UserService.updateUser(actorFromRequest(req), req.params.id, req.body);
       res.json({ success: true, data: user });
     } catch (err: any) {
       logger.error(`[Admin:updateUser] ${err}`);
@@ -2274,35 +2278,35 @@ export class AdminController {
           trafficByHour[23 - hourIndex]++;
         }
       });
-      // Fallback if empty database
-      const finalTraffic = trafficLogs.length === 0 
-        ? Array.from({ length: 24 }, () => Math.floor(Math.random() * 50) + 10)
-        : trafficByHour;
+      const finalTraffic = trafficByHour;
 
-      // 3. AI Provider Latency
+      // 3. AI Provider Latency (from PromptExecution aggregates only)
       const executions = await prisma.promptExecution.groupBy({
         by: ['providerName', 'modelName'],
         _avg: { durationMs: true },
         where: { createdAt: { gte: oneDayAgo } },
       });
 
-      const aiLatency: { providerName: string; modelName: string; latencyMs: number; apiKey: string }[] = [];
-      const addProvider = (name: string, model: string, key?: string) => {
-        if (!key) return;
-        const ex = executions.find(e => e.providerName === name);
-        aiLatency.push({
-          providerName: name,
-          modelName: ex?.modelName || model,
-          latencyMs: ex?._avg.durationMs || (Math.floor(Math.random() * 500) + 500), // Random stable latency if no executions yet
-          apiKey: key
-        });
-      };
+      const configuredProviders = [
+        { envKey: 'OPENAI_API_KEY', providerName: 'openai', modelName: 'gpt-4o' },
+        { envKey: 'ANTHROPIC_API_KEY', providerName: 'anthropic', modelName: 'claude-3-5-sonnet' },
+        { envKey: 'GEMINI_API_KEY', providerName: 'google', modelName: 'gemini-1.5-pro' },
+        { envKey: 'NVIDIA_API_KEY', providerName: 'nvidia', modelName: 'llama-3.1' },
+        { envKey: 'GROQ_API_KEY', providerName: 'groq', modelName: 'mixtral-8x7b' },
+      ];
 
-      addProvider('openai', 'gpt-4o', process.env.OPENAI_API_KEY);
-      addProvider('anthropic', 'claude-3-5-sonnet', process.env.ANTHROPIC_API_KEY);
-      addProvider('google', 'gemini-1.5-pro', process.env.GEMINI_API_KEY);
-      addProvider('nvidia', 'llama-3.1', process.env.NVIDIA_API_KEY);
-      addProvider('groq', 'mixtral-8x7b', process.env.GROQ_API_KEY);
+      const aiLatency = configuredProviders
+        .filter((p) => Boolean(process.env[p.envKey]))
+        .map((p) => {
+          const ex = executions.find((e) => e.providerName.toLowerCase() === p.providerName);
+          const avg = ex?._avg.durationMs;
+          return {
+            providerName: p.providerName,
+            modelName: ex?.modelName || p.modelName,
+            latencyMs: avg != null ? Math.round(avg) : null,
+            configured: true,
+          };
+        });
 
       // 4. System Events (Audit Logs marked as alerts/errors, or just the latest if none)
       const recentEvents = await prisma.auditLog.findMany({
@@ -2332,25 +2336,20 @@ export class AdminController {
         };
       });
 
-      // 5. Hardcode or use process for CPU/Mem
       const memoryUsage = process.memoryUsage();
-      const memUsedGB = (memoryUsage.heapUsed / 1024 / 1024 / 1024).toFixed(1);
-      const memTotalGB = (memoryUsage.heapTotal / 1024 / 1024 / 1024).toFixed(1);
+      const memUsedGB = (memoryUsage.heapUsed / 1024 / 1024 / 1024).toFixed(2);
+      const memTotalGB = (memoryUsage.heapTotal / 1024 / 1024 / 1024).toFixed(2);
 
       res.json({
         success: true,
         data: {
-          uptime: 99.98, // Example percentage
+          uptimeSeconds: process.uptime(),
           dbLatencyMs: pgLatencyMs,
-          redis: {
-            usedGB: 4.2,
-            totalGB: 8.0
-          },
+          redisConnected: isRedisConnected(),
           traffic24h: finalTraffic,
           aiProviders: aiLatency,
           events: events,
-          cpu: '45%',
-          memory: `${memUsedGB}GB / ${memTotalGB}GB`
+          memory: `${memUsedGB}GB / ${memTotalGB}GB`,
         },
       });
     } catch (err: any) {
@@ -2412,112 +2411,52 @@ export class AdminController {
         }
       });
 
-      const avgLatencyGlobally = latencyCount > 0 ? Math.round(totalLatency / latencyCount) : 420;
+      const avgLatencyGlobally = latencyCount > 0 ? Math.round(totalLatency / latencyCount) : null;
 
       const providerList = Array.from(providerStats.entries()).map(([name, stat]) => {
-        const avgLatency = stat.count > 0 ? stat.totalDuration / stat.count : 0;
-        let status = 'Operational';
-        if (avgLatency > 2000) status = 'High Latency';
-        
-        let quota = { pct: 50, label: '5M tokens' };
-        let tier = 'Scale';
-        if (name.includes('openai')) { quota = { pct: 64, label: '10M tokens' }; tier = 'Enterprise'; }
-        if (name.includes('anthropic')) { quota = { pct: 28, label: '5M tokens' }; tier = 'Scale'; }
-        if (name.includes('google') || name.includes('gemini')) { quota = { pct: 12, label: 'Unlimited' }; tier = 'Custom'; }
+        const avgLatency = stat.count > 0 ? Math.round(stat.totalDuration / stat.count) : null;
+        let status = stat.count === 0 ? 'No recent usage' : 'Operational';
+        if (avgLatency !== null && avgLatency > 2000) status = 'High Latency';
 
         return {
           id: name,
           name: name.charAt(0).toUpperCase() + name.slice(1),
-          tier: tier,
-          status: status,
-          activeModels: Array.from(stat.models).join(', '),
-          usageQuota: quota.pct,
-          usageLabel: quota.label,
+          tier: null,
+          status,
+          activeModels: Array.from(stat.models).join(', ') || null,
+          usageQuota: null,
+          usageLabel: null,
           costMtd: stat.costUsd,
-          avgLatency
+          avgLatency: avgLatency ?? 0,
         };
       });
 
-      const configuredProviders = [];
-      if (process.env.OPENAI_API_KEY) {
-        configuredProviders.push({
-          id: 'openai',
-          name: 'OpenAI',
-          tier: 'Enterprise',
-          status: 'Operational',
-          activeModels: 'GPT-4o, GPT-3.5-Turbo',
-          usageQuota: 64,
-          usageLabel: '10M tokens',
+      const configuredProviders = [
+        { id: 'openai', name: 'OpenAI', envKey: 'OPENAI_API_KEY' },
+        { id: 'anthropic', name: 'Anthropic', envKey: 'ANTHROPIC_API_KEY' },
+        { id: 'google', name: 'Google Gemini', envKey: 'GEMINI_API_KEY' },
+        { id: 'nvidia', name: 'NVIDIA', envKey: 'NVIDIA_API_KEY' },
+        { id: 'groq', name: 'Groq', envKey: 'GROQ_API_KEY' },
+      ]
+        .filter((p) => Boolean(process.env[p.envKey]))
+        .map((p) => ({
+          id: p.id,
+          name: p.name,
+          tier: null,
+          status: 'Configured',
+          activeModels: null,
+          usageQuota: null,
+          usageLabel: null,
           costMtd: 0,
           avgLatency: 0,
-          apiKey: `sk-...${process.env.OPENAI_API_KEY.slice(-4)}`
-        });
-      }
-      if (process.env.ANTHROPIC_API_KEY) {
-        configuredProviders.push({
-          id: 'anthropic',
-          name: 'Anthropic',
-          tier: 'Scale',
-          status: 'Operational',
-          activeModels: 'Claude 3.5 Sonnet, Opus',
-          usageQuota: 28,
-          usageLabel: '5M tokens',
-          costMtd: 0,
-          avgLatency: 0,
-          apiKey: `sk-ant-...${process.env.ANTHROPIC_API_KEY.slice(-4)}`
-        });
-      }
-      if (process.env.GEMINI_API_KEY) {
-        configuredProviders.push({
-          id: 'google',
-          name: 'Google Gemini',
-          tier: 'Custom',
-          status: 'Operational',
-          activeModels: 'Gemini 1.5 Pro, Flash',
-          usageQuota: 12,
-          usageLabel: 'Unlimited',
-          costMtd: 0,
-          avgLatency: 0,
-          apiKey: `AIzaSy...${process.env.GEMINI_API_KEY.slice(-4)}`
-        });
-      }
-      if (process.env.NVIDIA_API_KEY) {
-        configuredProviders.push({
-          id: 'nvidia',
-          name: 'NVIDIA',
-          tier: 'Enterprise',
-          status: 'Operational',
-          activeModels: 'Llama 3 70B, Nemotron',
-          usageQuota: 45,
-          usageLabel: '2M tokens',
-          costMtd: 0,
-          avgLatency: 0,
-          apiKey: `nvapi-...${process.env.NVIDIA_API_KEY.slice(-4)}`
-        });
-      }
-      if (process.env.GROQ_API_KEY) {
-        configuredProviders.push({
-          id: 'groq',
-          name: 'Groq',
-          tier: 'Scale',
-          status: 'Operational',
-          activeModels: 'Mixtral 8x7B, Llama 3',
-          usageQuota: 80,
-          usageLabel: '5M tokens',
-          costMtd: 0,
-          avgLatency: 0,
-          apiKey: `gsk-...${process.env.GROQ_API_KEY.slice(-4)}`
-        });
-      }
+        }));
 
-      // If we have executions, use them, otherwise use the configured providers
       if (providerList.length === 0) {
         providerList.push(...configuredProviders);
         totalMtdSpend = 0;
       } else {
-        // We have executions. Merge with configured providers if they are missing
         for (const cp of configuredProviders) {
-          if (!providerList.find(p => p.id === cp.id)) {
+          if (!providerList.find((p) => p.id === cp.id)) {
             providerList.push(cp);
           }
         }

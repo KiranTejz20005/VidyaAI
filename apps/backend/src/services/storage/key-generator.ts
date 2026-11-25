@@ -117,3 +117,24 @@ export function parseR2ObjectKey(key: string): {
 
   return { scope, entityId, fileId, filename };
 }
+
+/**
+ * Normalizes an object key and rejects anything that is not a plain relative
+ * key: empty keys, traversal segments, backslashes, control characters and
+ * empty path segments. Keys always come from a DB record or the key generator,
+ * so a rejection indicates tampering or a bug, never a legitimate request.
+ */
+export function normalizeStorageKey(key: string): string {
+  if (typeof key !== 'string') throw new Error('Invalid storage key');
+  const cleanKey = key.replace(/^\/+/, '');
+  if (
+    !cleanKey ||
+    cleanKey.length > 1024 ||
+    cleanKey.includes('\\') ||
+    Array.from(cleanKey).some((ch) => ch.charCodeAt(0) < 0x20 || ch.charCodeAt(0) === 0x7f) ||
+    cleanKey.split('/').some((segment) => segment === '' || segment === '.' || segment === '..')
+  ) {
+    throw new Error('Invalid storage key');
+  }
+  return cleanKey;
+}

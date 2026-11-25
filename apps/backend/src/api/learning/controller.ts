@@ -1,28 +1,55 @@
 import { Request, Response } from 'express';
-import { sendSuccess, sendNotFound, sendAccepted } from '../common/response';
+import { sendSuccess, sendNotFound } from '../common/response';
 import { parsePagination, buildPagination } from '../common/pagination';
+import { NotFoundError } from '../common/errors';
+import { getRequestOrgId, orgScope, requireRequestOrgId } from '../../security/request-context';
 
 import { LearningIntelligenceService } from '../../services/learning-intelligence.service';
 import { AnalyticsService } from '../../services/analytics.service';
 import prisma from '../../config/prisma';
+import { assertStudentAccess } from './student-access';
 import {
   serializeProfile,
   serializePrediction,
   serializeStudyPlan,
   serializeInsight,
-  serializeJobStatus,
 } from './serializers';
 
+const PROFILE_SORTABLE_FIELDS = ['createdAt', 'updatedAt', 'masteryLevel'] as const;
+
+function toStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+}
+
+function describeVelocity(knowledgeGrowth: number): string {
+  if (knowledgeGrowth > 2) return 'Accelerating';
+  if (knowledgeGrowth < -2) return 'Declining';
+  return 'Stable';
+}
+
+/** Roster `Student` row of the caller's organization, or 404. */
+async function requireRosterStudent(req: Request, studentId: string): Promise<void> {
+  const scope = orgScope(req);
+  const student = await prisma.student.findFirst({
+    where: { id: studentId, ...(scope.organizationId ? { group: { organizationId: scope.organizationId } } : {}) },
+    select: { id: true },
+  });
+  if (!student) throw new NotFoundError('Student not found');
+}
+
 export const listProfiles = async (req: Request, res: Response): Promise<void> => {
-  const { page, limit, sort, order } = parsePagination(req);
+  const { page, limit, sort, order } = parsePagination(req, PROFILE_SORTABLE_FIELDS);
+  const scope = orgScope(req);
+  const where = scope.organizationId ? { student: { group: { organizationId: scope.organizationId } } } : {};
 
   const [profiles, total] = await Promise.all([
     prisma.studentLearningProfile.findMany({
+      where,
       orderBy: { [sort]: order },
       skip: (page - 1) * limit,
       take: limit,
     }),
-    prisma.studentLearningProfile.count(),
+    prisma.studentLearningProfile.count({ where }),
   ]);
 
   sendSuccess(res, {
@@ -33,63 +60,27 @@ export const listProfiles = async (req: Request, res: Response): Promise<void> =
 
 export const getProfile = async (req: Request, res: Response): Promise<void> => {
   const { studentId } = req.params;
+  await assertStudentAccess(req, studentId);
 
-  let profile = await prisma.studentLearningProfile.findUnique({
+  const profile = await prisma.studentLearningProfile.findUnique({
     where: { studentId },
+    include: { predictiveAnalytics: true },
   });
 
   if (!profile) {
-    try {
-      if ((prisma as any).studentLearningProfile) {
-        profile = await (prisma as any).studentLearningProfile.create({
-          data: {
-            studentId,
-            masteryLevel: 75,
-            knowledgeGrowth: 5.2,
-            weakConcepts: ['Recursive Dynamic Programming', 'Graph Shortest Paths', 'Database Normalization BCNF'],
-          },
-        });
-      }
-    } catch {
-      profile = null;
-    }
-
-    if (!profile) {
-      profile = {
-        id: studentId,
-        studentId,
-        masteryLevel: 75,
-        knowledgeGrowth: 5.2,
-        weakConcepts: ['Recursive Dynamic Programming', 'Graph Shortest Paths', 'Database Normalization BCNF'],
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      } as any;
-    }
+    sendNotFound(res, 'Learning profile not found');
+    return;
   }
 
   const serialized = serializeProfile(profile);
+  const readiness = profile.predictiveAnalytics?.examReadiness ?? profile.masteryLevel;
   const enriched = {
     ...serialized,
-    overallMasteryScore: Math.round(profile?.masteryLevel ?? 75),
-    predictedReadiness: Math.min(100, Math.round((profile?.masteryLevel ?? 75) + 8)),
-    learningVelocity: 'High (Accelerating)',
-    strongConcepts: [
-      'Relational Database Architecture & Queries',
-      'Data Structures & Array Algorithms',
-      'Network Protocols & OSI Layering',
-      'Object-Oriented Design & Polymorphism',
-    ],
-    weakConcepts: Array.isArray(profile?.weakConcepts) && profile.weakConcepts.length > 0
-      ? profile.weakConcepts
-      : ['Recursive Dynamic Programming', 'Graph Shortest Paths', 'Database Normalization BCNF'],
-    taxonomyBreakdown: [
-      { level: 'Remembering', score: 92, target: 85 },
-      { level: 'Understanding', score: 86, target: 85 },
-      { level: 'Applying', score: 78, target: 80 },
-      { level: 'Analyzing', score: 72, target: 75 },
-      { level: 'Evaluating', score: 68, target: 70 },
-      { level: 'Creating', score: 64, target: 65 },
-    ],
+    overallMasteryScore: Math.round(profile.masteryLevel),
+    predictedReadiness: Math.min(100, Math.round(readiness)),
+    learningVelocity: describeVelocity(profile.knowledgeGrowth),
+    strongConcepts: toStringArray(profile.strongConcepts),
+    weakConcepts: toStringArray(profile.weakConcepts),
   };
 
   sendSuccess(res, { data: enriched });
@@ -97,16 +88,16 @@ export const getProfile = async (req: Request, res: Response): Promise<void> => 
 
 export const updateProfile = async (req: Request, res: Response): Promise<void> => {
   const { studentId } = req.params;
-  const { weakConcepts, masteryLevel, learningStyle } = req.body;
+  await requireRosterStudent(req, studentId);
+  const { weakConcepts, masteryLevel } = req.body as { weakConcepts?: string[]; masteryLevel?: number };
 
-  const profile = await (prisma as any).studentLearningProfile.upsert({
+  const profile = await prisma.studentLearningProfile.upsert({
     where: { studentId },
     update: {
       ...(weakConcepts !== undefined && { weakConcepts }),
       ...(masteryLevel !== undefined && { masteryLevel }),
-      ...(learningStyle !== undefined && { learningStyle }),
     },
-    create: { studentId, weakConcepts: weakConcepts ?? [], masteryLevel: masteryLevel ?? 0, learningStyle },
+    create: { studentId, weakConcepts: weakConcepts ?? [], masteryLevel: masteryLevel ?? 0 },
   });
 
   sendSuccess(res, { data: serializeProfile(profile), message: 'Profile updated' });
@@ -114,20 +105,25 @@ export const updateProfile = async (req: Request, res: Response): Promise<void> 
 
 export const getPredictions = async (req: Request, res: Response): Promise<void> => {
   const { studentId } = req.params;
+  await assertStudentAccess(req, studentId);
 
-  const profile = await prisma.studentLearningProfile.findUnique({ where: { studentId } });
+  const profile = await prisma.studentLearningProfile.findUnique({
+    where: { studentId },
+    include: { predictiveAnalytics: true },
+  });
   if (!profile) {
     sendNotFound(res, 'Learning profile not found');
     return;
   }
 
+  const mastery = profile.masteryLevel || 0;
+  const predictive = profile.predictiveAnalytics;
+  const weakConcepts = toStringArray(profile.weakConcepts);
   const prediction = {
-    predictedScore: Math.min(100, (profile.masteryLevel || 0) + Math.random() * 10),
-    confidence: 0.75 + Math.random() * 0.2,
-    atRisk: (profile.masteryLevel || 0) < 40,
-    recommendations: profile.weakConcepts
-      ? [`Review: ${(profile.weakConcepts as string[]).join(', ')}`]
-      : ['Continue current study plan'],
+    predictedScore: Math.min(100, Math.round(predictive?.examReadiness ?? mastery)),
+    confidence: predictive ? Math.min(1, Math.max(0, predictive.probabilityOfPassing / 100)) : Math.min(1, Math.max(0, profile.consistencyScore / 100)),
+    atRisk: mastery < 40,
+    recommendations: weakConcepts.length > 0 ? [`Review: ${weakConcepts.join(', ')}`] : ['Continue current study plan'],
   };
 
   sendSuccess(res, { data: serializePrediction(prediction) });
@@ -135,8 +131,16 @@ export const getPredictions = async (req: Request, res: Response): Promise<void>
 
 export const refreshProfile = async (req: Request, res: Response): Promise<void> => {
   const { studentId } = req.params;
+  await assertStudentAccess(req, studentId);
 
-  await LearningIntelligenceService.updateMasteryProfile(studentId, 0);
+  const existing = await prisma.studentLearningProfile.findUnique({ where: { studentId }, select: { id: true } });
+  if (!existing) {
+    sendNotFound(res, 'Learning profile not found');
+    return;
+  }
+
+  const performance = await AnalyticsService.getStudentPerformance(studentId, getRequestOrgId(req));
+  await LearningIntelligenceService.updateMasteryProfile(studentId, performance.averageScore);
 
   const profile = await prisma.studentLearningProfile.findUnique({ where: { studentId } });
   sendSuccess(res, { data: serializeProfile(profile), message: 'Profile refreshed' });
@@ -144,87 +148,63 @@ export const refreshProfile = async (req: Request, res: Response): Promise<void>
 
 export const getStudyPlans = async (req: Request, res: Response): Promise<void> => {
   const { studentId } = req.params;
+  await assertStudentAccess(req, studentId);
 
-  let plans = await prisma.personalizedStudyPlan.findMany({
+  const primaryPlan = await prisma.personalizedStudyPlan.findFirst({
     where: { studentId },
     orderBy: { createdAt: 'desc' },
   });
 
-  if (plans.length === 0) {
-    try {
-      const defaultPlan = await prisma.personalizedStudyPlan.create({
-        data: {
-          studentId,
-          title: 'Core Foundations & Exam Readiness Plan',
-          recommendedTopics: ['Database Normalization & BCNF', 'SQL Query Optimization', 'Dynamic Programming Patterns'],
-          referenceMaterials: { source: 'curriculum', generated: true },
-          estimatedTimeMins: 90,
-          difficultyTarget: 'INTERMEDIATE',
-        },
-      });
-      plans = [defaultPlan];
-    } catch {
-      // Fallback in case of unique constraint or transient error
-    }
+  if (!primaryPlan) {
+    sendSuccess(res, { data: null, message: 'No study plan generated yet' });
+    return;
   }
 
-  const primaryPlan = plans[0];
-  const enrichedDailyPlan = [
-    {
-      title: 'Review BCNF & Multivalued Dependencies',
-      subject: 'Database Management Systems',
-      chapter: 'Normalization & Schema Refinement',
-      estimatedMinutes: 30,
-      difficulty: 'INTERMEDIATE',
-      type: 'READING',
-      learningOutcome: 'Analyze and decompose tables into Boyce-Codd Normal Form',
-    },
-    {
-      title: 'Solve 5 Practice Questions on SQL Aggregations',
-      subject: 'Database Management Systems',
-      chapter: 'Advanced SQL Queries',
-      estimatedMinutes: 35,
-      difficulty: 'HARD',
-      type: 'PRACTICE',
-      learningOutcome: 'Apply GROUP BY, HAVING, and Window Functions accurately',
-    },
-    {
-      title: 'AI Diagnostic Quiz: Relational Algebra & Calculus',
-      subject: 'Computer Science Core',
-      chapter: 'Formal Query Languages',
-      estimatedMinutes: 25,
-      difficulty: 'MEDIUM',
-      type: 'QUIZ',
-      learningOutcome: 'Evaluate relational equivalence expressions',
-    },
-  ];
+  const topics = toStringArray(primaryPlan.recommendedTopics);
+  const minutesPerTopic = topics.length > 0 ? Math.max(1, Math.round(primaryPlan.estimatedTimeMins / topics.length)) : 0;
+  const dailyPlan = topics.map((topic) => ({
+    title: `Review ${topic}`,
+    subject: topic,
+    chapter: topic,
+    estimatedMinutes: minutesPerTopic,
+    difficulty: primaryPlan.difficultyTarget,
+    type: 'READING',
+    learningOutcome: `Strengthen understanding of ${topic}`,
+  }));
 
-  const singlePlanData = {
-    id: primaryPlan?.id || 'default-study-plan',
-    studentId,
-    title: primaryPlan?.title || 'Personalized Exam Preparation Roadmap',
-    recommendedTopics: primaryPlan?.recommendedTopics || ['Database Normalization', 'SQL Optimization', 'Graph Algorithms'],
-    estimatedTimeMins: primaryPlan?.estimatedTimeMins || 90,
-    difficultyTarget: primaryPlan?.difficultyTarget || 'INTERMEDIATE',
-    dailyPlan: enrichedDailyPlan,
-    createdAt: primaryPlan?.createdAt || new Date(),
-  };
-
-  sendSuccess(res, { data: singlePlanData });
+  sendSuccess(res, {
+    data: {
+      id: primaryPlan.id,
+      studentId,
+      title: primaryPlan.title,
+      recommendedTopics: topics,
+      estimatedTimeMins: primaryPlan.estimatedTimeMins,
+      difficultyTarget: primaryPlan.difficultyTarget,
+      dailyPlan,
+      createdAt: primaryPlan.createdAt,
+    },
+  });
 };
 
 export const generateStudyPlan = async (req: Request, res: Response): Promise<void> => {
   const { studentId } = req.params;
+  await assertStudentAccess(req, studentId);
+  const orgId = requireRequestOrgId(req);
 
   const plan = await LearningIntelligenceService.generateStudyPlan(studentId);
+  if (!plan) {
+    sendNotFound(res, 'Learning profile not found');
+    return;
+  }
 
   sendSuccess(res, { data: serializeStudyPlan(plan), message: 'Study plan generated' });
 };
 
 export const getInsights = async (req: Request, res: Response): Promise<void> => {
   const { studentId } = req.params;
+  await assertStudentAccess(req, studentId);
 
-  const performance = await AnalyticsService.getStudentPerformance(studentId);
+  const performance = await AnalyticsService.getStudentPerformance(studentId, getRequestOrgId(req));
 
   const insight = {
     studentId,
@@ -237,29 +217,32 @@ export const getInsights = async (req: Request, res: Response): Promise<void> =>
   sendSuccess(res, { data: serializeInsight(insight) });
 };
 
-export const identifyAtRisk = async (_req: Request, res: Response): Promise<void> => {
-  const job = await (prisma as any).generationJob.create({
-    data: {
-      assignmentId: '',
-      status: 'queued',
-      progress: 0,
-      progressVersion: 0,
-      stageIndex: 0,
-      startedAt: new Date(),
+export const identifyAtRisk = async (req: Request, res: Response): Promise<void> => {
+  const scope = orgScope(req);
+  const thresholds = (req.body as { thresholds?: { minScore?: number } }).thresholds;
+  const minScore = thresholds?.minScore ?? 40;
+
+  const profiles = await prisma.studentLearningProfile.findMany({
+    where: {
+      masteryLevel: { lt: minScore },
+      ...(scope.organizationId ? { student: { group: { organizationId: scope.organizationId } } } : {}),
     },
+    orderBy: { masteryLevel: 'asc' },
+    take: 200,
+    include: { student: { select: { id: true, name: true, rollNo: true, groupId: true } } },
   });
 
-  sendAccepted(res, serializeJobStatus(job));
-};
-
-export const getIdentifyAtRiskStatus = async (req: Request, res: Response): Promise<void> => {
-  const { jobId } = req.params;
-
-  const job = await prisma.generationJob.findUnique({ where: { id: jobId } });
-  if (!job) {
-    sendNotFound(res, 'Job not found');
-    return;
-  }
-
-  sendSuccess(res, { data: serializeJobStatus(job) });
+  sendSuccess(res, {
+    data: {
+      threshold: minScore,
+      atRiskStudents: profiles.map((p) => ({
+        studentId: p.studentId,
+        name: p.student.name,
+        rollNo: p.student.rollNo,
+        groupId: p.student.groupId,
+        masteryLevel: p.masteryLevel,
+        weakConcepts: toStringArray(p.weakConcepts),
+      })),
+    },
+  });
 };
