@@ -2,11 +2,13 @@ import { Request, Response, Router } from 'express';
 import { getRedisClient } from '../../config/redis';
 import prisma from '../../config/prisma';
 import { logger } from '../../utils/logger';
+import { authenticate } from '../../middlewares/auth.middleware';
+import { requireRole } from '../../security/role.middleware';
 import { getActiveAiJobCount, getStalledAiJobCount } from '../../workers/aiGeneration.worker';
 
 const router = Router();
 
-router.get('/metrics', async (_req: Request, res: Response) => {
+router.get('/metrics', authenticate, requireRole('ADMIN'), async (_req: Request, res: Response) => {
   const start = Date.now();
   try {
     const [dbOk, redisOk, activeJobs, stalledJobs] = await Promise.all([

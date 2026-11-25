@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { authenticate } from '../../middlewares/auth.middleware';
+import { requireRole } from '../../security/role.middleware';
 import { validate } from '../../middlewares/validate.middleware';
 import { asyncHandler } from '../../utils/async-handler';
 import { jobIdParamSchema, listJobsQuerySchema } from './validators';
@@ -14,6 +15,7 @@ import {
 const router = Router();
 
 router.use(authenticate);
+router.use(requireRole('TEACHER', 'ADMIN'));
 
 router.get('/', validate(listJobsQuerySchema), asyncHandler(listJobs));
 router.get('/:jobId', validate(jobIdParamSchema), asyncHandler(getJob));

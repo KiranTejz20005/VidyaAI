@@ -2,7 +2,8 @@ import { Request, Response } from 'express';
 import { sendSuccess, sendCreated, sendNoContent } from '../common/response';
 import { parsePagination, buildPagination } from '../common/pagination';
 import { getRequestUserId } from '../../security/request-context';
-import { UserService } from '../../services/admin/user.service';
+import { UserService, resolveAssignableRole, resolveTargetOrganization } from '../../services/admin/user.service';
+import { actorFromRequest } from '../../services/admin/admin-scope';
 import { OrganizationService } from '../../services/admin/organization.service';
 import { BillingService } from '../../services/admin/billing.service';
 import { AuditService } from '../../services/audit.service';
@@ -72,7 +73,10 @@ export const listUsers = async (req: Request, res: Response): Promise<void> => {
 };
 
 export const createUser = async (req: Request, res: Response): Promise<void> => {
-  const user = await UserService.createUser(req.body);
+  const actor = actorFromRequest(req);
+  const role = resolveAssignableRole(actor, req.body.role);
+  const organizationId = resolveTargetOrganization(actor, role, req.body.organizationId);
+  const { user, tempPassword } = await UserService.createUser({ ...req.body, role, organizationId });
 
   await AuditService.logAuditEvent({
     userId: getRequestUserId(req),
@@ -82,12 +86,12 @@ export const createUser = async (req: Request, res: Response): Promise<void> => 
     metadata: { email: user.email, role: user.role },
   });
 
-  sendCreated(res, serializeUser(user), 'User created');
+  sendCreated(res, { ...serializeUser(user), tempPassword }, 'User created');
 };
 
 export const updateUser = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
-  const user = await UserService.updateUser(id, req.body);
+  const user = await UserService.updateUser(actorFromRequest(req), id, req.body);
 
   sendSuccess(res, { data: serializeUser(user), message: 'User updated' });
 };
@@ -110,7 +114,7 @@ export const changeUserRole = async (req: Request, res: Response): Promise<void>
   const { id } = req.params;
   const { role } = req.body;
 
-  const user = await UserService.updateUser(id, { role });
+  const user = await UserService.updateUser(actorFromRequest(req), id, { role });
 
   await AuditService.logAuditEvent({
     userId: getRequestUserId(req),
@@ -145,7 +149,7 @@ export const listOrganizations = async (req: Request, res: Response): Promise<vo
 };
 
 export const createOrganization = async (req: Request, res: Response): Promise<void> => {
-  const org = await OrganizationService.createOrganization(req.body);
+  const { organization: org, tempPassword } = await OrganizationService.createOrganization(req.body);
 
   await AuditService.logAuditEvent({
     userId: getRequestUserId(req),
@@ -155,12 +159,12 @@ export const createOrganization = async (req: Request, res: Response): Promise<v
     metadata: { name: org.name },
   });
 
-  sendCreated(res, serializeOrganization(org), 'Organization created');
+  sendCreated(res, { ...serializeOrganization(org), adminTempPassword: tempPassword }, 'Organization created');
 };
 
 export const updateOrganization = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
-  const org = await OrganizationService.updateOrganization(id, req.body);
+  const org = await OrganizationService.updateOrganization(actorFromRequest(req), id, req.body);
 
   sendSuccess(res, { data: serializeOrganization(org), message: 'Organization updated' });
 };
@@ -223,24 +227,28 @@ export const getSubscriptions = async (_req: Request, res: Response): Promise<vo
 };
 
 export const getPlatformUsage = async (_req: Request, res: Response): Promise<void> => {
-  const [totalRequests, activeUsers, totalOrganizations] = await Promise.all([
+  const [totalRequests, activeUsers, totalOrganizations, tokenAgg, storageAgg] = await Promise.all([
     prisma.promptExecution.count(),
     prisma.session.count({ where: { isActive: true, expiresAt: { gte: new Date() } } }),
     prisma.organization.count(),
+    prisma.promptExecution.aggregate({
+      _sum: { tokensPrompt: true, tokensCompletion: true },
+    }),
+    prisma.storedFile.aggregate({ _sum: { sizeBytes: true } }),
   ]);
+
+  const aiTokensUsed =
+    (tokenAgg._sum.tokensPrompt ?? 0) + (tokenAgg._sum.tokensCompletion ?? 0);
+  const storageUsedGb = (storageAgg._sum.sizeBytes ?? 0) / 1024 ** 3;
 
   sendSuccess(res, {
     data: serializePlatformUsage({
       totalRequests,
       activeUsers,
       totalOrganizations,
-      storageUsedGb: Math.floor(Math.random() * 50) + 10,
-      aiTokensUsed: 1250000,
-      apiCallsByEndpoint: {
-        '/api/v1/assignments': 5230,
-        '/api/v1/quizzes': 3120,
-        '/api/v1/tutor': 1890,
-      },
+      storageUsedGb,
+      aiTokensUsed,
+      apiCallsByEndpoint: {},
     }),
   });
 };

@@ -5,5 +5,5 @@
 export const PUBLIC_API_URL = process.env.NEXT_PUBLIC_API_URL;
 export const PUBLIC_SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL;
 
-/** Deployed backend used when env is missing (local dev without .env). */
-export const DEFAULT_API_ORIGIN = 'https://vidyaai-test.onrender.com';
+/** Local backend used when NEXT_PUBLIC_API_URL is unset outside production builds. */
+export const LOCAL_API_ORIGIN = 'http://localhost:3001';

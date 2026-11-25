@@ -9,7 +9,14 @@ const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY || '' });
 
 import { parseDocumentIntoSemanticChunks } from './document-parser.service';
 
-export async function ingestDocument(fileUrl: string, fileType: string, organizationId: string, filename: string, _userId: string = 'system'): Promise<string> {
+export async function ingestDocument(
+  fileUrl: string,
+  fileType: string,
+  organizationId: string,
+  filename: string,
+  _userId: string = 'system',
+  options: { documentId?: string } = {},
+): Promise<string> {
   if (!env.OPENAI_API_KEY) {
     logger.warn('No OPENAI_API_KEY found, RAG embeddings will be skipped.');
     return '';
@@ -24,7 +31,8 @@ export async function ingestDocument(fileUrl: string, fileType: string, organiza
   let category = 'HANDOUT';
   let status = 'ACTIVE';
 
-  if (semanticChunks.length > 0) {
+  // Re-indexing keeps the document's existing classification and approval state.
+  if (semanticChunks.length > 0 && !options.documentId) {
     const sampleIndices = [
       0, 
       Math.floor(semanticChunks.length / 2), 
@@ -79,63 +87,55 @@ ${sampleText}`;
     }
   }
 
-  const doc = await prisma.knowledgeDocument.create({
-    data: {
-      filename,
-      fileUrl,
-      organizationId,
-      category,
-      status: status as any
-    }
-  });
-
-  let previousChunkId: string | null = null;
-  
+  // Embed every chunk first. Nothing is written until all embeddings succeed, so a
+  // failure part-way through can never leave a document with half its chunks.
+  const chunkIds = semanticChunks.map(() => randomUUID());
+  const prepared: { id: string; content: string; vector: string; metadata: Record<string, unknown> }[] = [];
   for (let i = 0; i < semanticChunks.length; i++) {
     const chunkObj = semanticChunks[i];
-    
-    // Generate embedding
-    const response = await openai.embeddings.create({
-      model: 'text-embedding-3-small',
-      input: chunkObj.content,
+    const response = await openai.embeddings.create({ model: 'text-embedding-3-small', input: chunkObj.content });
+    prepared.push({
+      id: chunkIds[i],
+      content: chunkObj.content,
+      vector: `[${response.data[0].embedding.join(',')}]`,
+      metadata: {
+        ...chunkObj.metadata,
+        chunkType: chunkObj.chunkType,
+        prevChunkId: i > 0 ? chunkIds[i - 1] : null,
+        nextChunkId: i < chunkIds.length - 1 ? chunkIds[i + 1] : null,
+      },
     });
+  }
 
-    const embedding = response.data[0].embedding;
-
-    // Set up metadata with hierarchical graph links
-    const extendedMetadata: Record<string, unknown> = {
-      ...chunkObj.metadata,
-      chunkType: chunkObj.chunkType,
-      prevChunkId: previousChunkId,
-      // We will leave nextChunkId null for now, or we can update the previous one.
-      // To keep it simple, we just store prevChunkId.
-    };
-    
-    const dbChunkId = randomUUID();
-    
-    // Convert embedding array to string format expected by pgvector: "[1.2, 0.5, ...]"
-    const vectorString = `[${embedding.join(',')}]`;
-
-    await prisma.$executeRaw`
-      INSERT INTO "KnowledgeChunk" ("id", "documentId", "content", "vector", "metadata", "createdAt")
-      VALUES (${dbChunkId}, ${doc.id}, ${chunkObj.content}, ${vectorString}::vector, ${extendedMetadata}::jsonb, NOW())
-    `;
-    // Update previous chunk's nextChunkId to establish the bidirectional graph
-    if (previousChunkId) {
-      await prisma.$executeRaw`
-        UPDATE "KnowledgeChunk" 
-        SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{nextChunkId}', ${dbChunkId}::jsonb) 
-        WHERE id = ${previousChunkId}
+  const docId = await prisma.$transaction(async (tx) => {
+    let id: string;
+    if (options.documentId) {
+      const existing = await tx.knowledgeDocument.findFirst({
+        where: { id: options.documentId, organizationId },
+        select: { id: true },
+      });
+      if (!existing) throw new Error('Document not found in this organization');
+      id = existing.id;
+      await tx.knowledgeChunk.deleteMany({ where: { documentId: id } });
+      await tx.knowledgeDocument.update({ where: { id }, data: { status: 'ACTIVE' } });
+    } else {
+      id = (await tx.knowledgeDocument.create({
+        data: { filename, fileUrl, organizationId, category, status: status as any },
+      })).id;
+    }
+    for (const row of prepared) {
+      await tx.$executeRaw`
+        INSERT INTO "KnowledgeChunk" ("id", "documentId", "content", "vector", "metadata", "createdAt")
+        VALUES (${row.id}, ${id}, ${row.content}, ${row.vector}::vector, ${row.metadata}::jsonb, NOW())
       `;
     }
-
-    previousChunkId = dbChunkId;
-  }
+    return id;
+  }, { timeout: 120_000 });
 
   // Invalidate cached RAG results for this organization so new embeddings are picked up
   await invalidateByPattern(`rag:${organizationId}:*`).catch(() => {});
 
-  return doc.id;
+  return docId;
 }
 
 

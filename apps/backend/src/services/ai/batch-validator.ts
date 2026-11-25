@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { jsonrepair } from 'jsonrepair';
+import { safeJsonRepairParse } from '../../utils/safe-json';
 import { z } from 'zod';
 import type { QuestionType } from '../../types/assignment.types';
 import { validateSingleQuestion } from '../../validators/per-question-validator';
@@ -141,9 +141,8 @@ function parseAiJson(rawOutput: string): { value: unknown; repaired: boolean } {
     throw new Error('AI output appears truncated');
   }
 
-  const repaired = jsonrepair(cleaned);
-  const parsed = JSON.parse(repaired) as unknown;
-  return { value: parsed, repaired: repaired !== cleaned };
+  const { value, repairedText } = safeJsonRepairParse(cleaned);
+  return { value, repaired: repairedText !== cleaned };
 }
 
 function extractCandidateQuestions(parsed: unknown): unknown[] {

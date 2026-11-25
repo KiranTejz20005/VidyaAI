@@ -12,17 +12,13 @@ export function serializeAuthUser(user: Record<string, unknown>): AuthUserRespon
     departmentId: user.departmentId as string | null | undefined,
     hasCompletedOnboarding: user.hasCompletedOnboarding as boolean,
     avatar: user.avatar as string | null | undefined,
+    forcePasswordReset: Boolean(user.forcePasswordReset),
   };
 }
 
-export function serializeAuthTokens(
-  accessToken: string,
-  user: Record<string, unknown>,
-  refreshToken?: string,
-): AuthTokensResponseDto {
+export function serializeAuthTokens(accessToken: string, user: Record<string, unknown>): AuthTokensResponseDto {
   return {
     accessToken,
-    ...(refreshToken && { refreshToken }),
     user: serializeAuthUser(user),
   };
 }
@@ -45,6 +41,7 @@ export function serializeProfile(
     preferences: (user.preferences as Record<string, unknown>) ?? {},
     hasCompletedOnboarding: user.hasCompletedOnboarding as boolean,
     avatar: user.avatar as string | null | undefined,
+    forcePasswordReset: Boolean(user.forcePasswordReset),
   };
 }
 

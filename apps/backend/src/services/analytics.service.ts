@@ -14,21 +14,30 @@ function getNvidia(): OpenAI {
   return nvidiaClient;
 }
 
+/** Upper bound on rows loaded for in-memory aggregation. */
+const MAX_AGGREGATION_ROWS = 5000;
+
 export class AnalyticsService {
-  static async getStudentPerformance(studentId: string) {
-    return getOrSet(`analytics:student:${studentId}`, async () => {
-      return AnalyticsService.computeStudentPerformance(studentId);
+  /**
+   * Performance of one student. `organizationId` confines the data to a tenant
+   * and is part of the cache key, so cached results never cross tenants.
+   * Callers must authorize access to `studentId` before calling.
+   */
+  static async getStudentPerformance(studentId: string, organizationId?: string) {
+    return getOrSet(`analytics:student:${organizationId ?? 'platform'}:${studentId}`, async () => {
+      return AnalyticsService.computeStudentPerformance(studentId, organizationId);
     }, CacheTTL.SHORT);
   }
 
-  private static async computeStudentPerformance(studentId: string) {
+  private static async computeStudentPerformance(studentId: string, organizationId?: string) {
     // Find submissions and evaluations
     const submissions = await prisma.studentSubmission.findMany({
-      where: { studentId },
+      where: { studentId, ...(organizationId ? { organizationId } : {}) },
       include: {
         evaluations: true,
       },
       orderBy: { submittedAt: 'asc' },
+      take: MAX_AGGREGATION_ROWS,
     });
 
     const scores = submissions
@@ -106,23 +115,31 @@ export class AnalyticsService {
     };
   }
 
-  static async getGroupPerformance(groupId: string) {
+  /**
+   * Performance of one class. With `organizationId` the class, its students and
+   * their submissions are all confined to that tenant. Callers must authorize
+   * access to the class before calling.
+   */
+  static async getGroupPerformance(groupId: string, organizationId?: string) {
     const students = await prisma.classStudent.findMany({
-      where: { classId: groupId }
+      where: { classId: groupId, ...(organizationId ? { class: { organizationId } } : {}) },
+      take: MAX_AGGREGATION_ROWS,
     });
 
-    // In a real system, you'd match ClassStudent email to User email or ID.
-    // For now, since submissions are linked to user ID, we'll try to find users matching emails.
+    // Submissions are keyed by user id, so roster rows are matched to users by e-mail.
     const studentEmails = students.map(s => s.email);
     const users = await prisma.user.findMany({
-      where: { email: { in: studentEmails } }
+      where: { email: { in: studentEmails }, ...(organizationId ? { organizationId } : {}) },
+      select: { id: true, firstName: true, lastName: true },
     });
     const studentIds = users.map(u => u.id);
 
     // Find all submissions for these students
     const submissions = await prisma.studentSubmission.findMany({
-      where: { studentId: { in: studentIds } },
+      where: { studentId: { in: studentIds }, ...(organizationId ? { organizationId } : {}) },
       include: { evaluations: true },
+      orderBy: { submittedAt: 'desc' },
+      take: MAX_AGGREGATION_ROWS,
     });
 
     const evaluations = submissions
@@ -131,7 +148,7 @@ export class AnalyticsService {
 
     const averageScore = evaluations.length > 0
       ? (evaluations.reduce((sum, e) => sum + (e.score / e.totalMarks) * 100, 0) / evaluations.length)
-      : 70; // fallback default
+      : 0;
 
     // Compute distribution
     const distribution = { A: 0, B: 0, C: 0, D: 0, F: 0 };
@@ -181,11 +198,13 @@ export class AnalyticsService {
     };
   }
 
-  static async generateAIRecommendations(targetId: string, type: 'STUDENT' | 'CLASS') {
+  static async generateAIRecommendations(targetId: string, type: 'STUDENT' | 'CLASS', organizationId?: string) {
     let promptText = '';
-    
+    let fallbackTopics: string[] = [];
+
     if (type === 'STUDENT') {
-      const stats = await AnalyticsService.getStudentPerformance(targetId);
+      const stats = await AnalyticsService.getStudentPerformance(targetId, organizationId);
+      fallbackTopics = stats.weakAreas;
       promptText = `You are an expert educational tutor. Review the following student analytics performance:
   - Average score percentage: ${stats.averageScore.toFixed(1)}%
   - Performance trend: ${stats.growthTrend}
@@ -198,7 +217,7 @@ export class AnalyticsService {
     "suggestedTopics": ["list", "of", "weak", "topics", "to", "review"]
   }`;
     } else {
-      const stats = await AnalyticsService.getGroupPerformance(targetId);
+      const stats = await AnalyticsService.getGroupPerformance(targetId, organizationId);
       promptText = `You are an expert curriculum supervisor. Review the following class-wide analytics performance:
   - Average score: ${stats.averageScore.toFixed(1)}%
   - Grade distribution: ${JSON.stringify(stats.distribution)}
@@ -229,11 +248,11 @@ export class AnalyticsService {
       const parsed = JSON.parse(text.replace(/```json|```/gi, '').trim());
       finalContent = parsed.recommendations || finalContent;
       suggested = parsed.suggestedTopics || [];
-    } catch (err) {
-      // Fallback recommendation
+    } catch {
+      // Fallback recommendation built only from the measured weak areas.
       finalContent = `### Revision Plan
   Review topics where scores fall below 65%. Practice active recall and space repetition exercises.`;
-      suggested = type === 'STUDENT' ? ['Mathematics', 'Science'] : ['Core Units'];
+      suggested = fallbackTopics;
     }
 
     // Save to DB
@@ -244,18 +263,18 @@ export class AnalyticsService {
         type,
         content: finalContent,
         suggestedTopics: suggested,
+        organizationId: organizationId ?? null,
       },
     });
 
     return rec;
   }
 
+  /**
+   * Organization dashboard. Pass the caller's tenant; `undefined` aggregates
+   * across the whole platform and must only be used for a SUPER_ADMIN.
+   */
   static async getAdminAnalytics(organizationId?: string) {
-    if (!organizationId) {
-      const firstOrg = await prisma.organization.findFirst();
-      if (firstOrg) organizationId = firstOrg.id;
-    }
-
     const totalUsers = await prisma.user.count({
       where: organizationId ? { organizationId } : {},
     });
@@ -276,6 +295,7 @@ export class AnalyticsService {
       where: {
         isActive: true,
         expiresAt: { gte: new Date() },
+        ...(organizationId ? { user: { organizationId } } : {}),
       },
     });
 
@@ -287,16 +307,11 @@ export class AnalyticsService {
       where: organizationId ? { organizationId } : {},
     });
 
-    // Retrieve active tokens/costs dynamically or mock if empty
-    const promptExecs = await prisma.promptExecution.findMany({
+    // Token and cost usage aggregated per provider in the database.
+    const promptExecs = await prisma.promptExecution.groupBy({
+      by: ['providerName'],
       where: organizationId ? { organizationId } : {},
-      select: {
-        tokensPrompt: true,
-        tokensCompletion: true,
-        costUsd: true,
-        providerName: true,
-        modelName: true,
-      },
+      _sum: { tokensPrompt: true, tokensCompletion: true, costUsd: true },
     });
 
     let totalTokens = 0;
@@ -310,27 +325,17 @@ export class AnalyticsService {
     };
 
     promptExecs.forEach(pe => {
-      const tokens = pe.tokensPrompt + pe.tokensCompletion;
+      const tokens = (pe._sum.tokensPrompt ?? 0) + (pe._sum.tokensCompletion ?? 0);
+      const cost = pe._sum.costUsd ?? 0;
       totalTokens += tokens;
-      totalCost += pe.costUsd;
+      totalCost += cost;
 
       const provider = pe.providerName.toLowerCase();
       if (providerUsage[provider]) {
         providerUsage[provider].tokens += tokens;
-        providerUsage[provider].cost += pe.costUsd;
+        providerUsage[provider].cost += cost;
       }
     });
-
-    // Provide realistic fallback data for local demo runs if no dynamic prompt executions exist yet
-    if (totalTokens === 0) {
-      totalTokens = 1250000;
-      totalCost = 37.5;
-      providerUsage.openai = { tokens: 500000, cost: 15.0 };
-      providerUsage.anthropic = { tokens: 400000, cost: 16.0 };
-      providerUsage.gemini = { tokens: 200000, cost: 3.5 };
-      providerUsage.nvidia = { tokens: 100000, cost: 2.0 };
-      providerUsage.groq = { tokens: 500000, cost: 1.0 };
-    }
 
     // Dynamic department performance mocks
     const departments = await prisma.department.findMany({
@@ -351,12 +356,18 @@ export class AnalyticsService {
 
     const allAssignments = await prisma.assignment.findMany({
       where: organizationId ? { organizationId } : {},
-      include: {
+      orderBy: { createdAt: 'desc' },
+      take: MAX_AGGREGATION_ROWS,
+      select: {
+        createdById: true,
         submissions: {
-          include: { evaluations: true }
+          select: {
+            createdAt: true,
+            evaluations: { select: { score: true, totalMarks: true } },
+          },
         },
-        createdBy: true
-      }
+        createdBy: { select: { firstName: true, lastName: true } },
+      },
     });
 
     const deptStats: Record<string, { papers: number, totalScore: number, scoreCount: number }> = {};

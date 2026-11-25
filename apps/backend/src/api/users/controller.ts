@@ -1,7 +1,8 @@
 import { Request, Response } from 'express';
 import prisma from '../../config/prisma';
 import { logger } from '../../utils/logger';
-import { UserService } from '../../services/admin/user.service';
+import { UserService, resolveAssignableRole, resolveTargetOrganization } from '../../services/admin/user.service';
+import { actorFromRequest } from '../../services/admin/admin-scope';
 import { RoleService } from '../../services/admin/role.service';
 import { sendSuccess, sendCreated, sendError, sendNotFound } from '../common/response';
 import { parsePagination, buildPagination } from '../common/pagination';
@@ -92,8 +93,11 @@ export const createUser = async (req: Request, res: Response): Promise<void> => 
   try {
     const { body } = createUserSchema.parse({ body: req.body });
     const orgId = requireRequestOrgId(req);
-    const user = await UserService.createUser({ ...body, organizationId: orgId });
-    sendCreated(res, serializeUser({ ...user, organization: null, department: null }), 'User created successfully');
+    const actor = actorFromRequest(req);
+    const role = resolveAssignableRole(actor, body.role, { allowOrgAdmin: true });
+    const organizationId = resolveTargetOrganization(actor, role, orgId);
+    const { user, tempPassword } = await UserService.createUser({ ...body, role, organizationId });
+    sendCreated(res, { ...serializeUser({ ...user, organization: null, department: null }), tempPassword }, 'User created successfully');
   } catch (error: any) {
     logger.error({ err: error }, '[createUser]');
     sendError(res, { error: 'Failed to create user', statusCode: 500 });
@@ -108,7 +112,7 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
       sendNotFound(res, 'User not found');
       return;
     }
-    const user = await UserService.updateUser(params.id, body);
+    const user = await UserService.updateUser(actorFromRequest(req), params.id, body);
     const full = await prisma.user.findUnique({
       where: { id: user.id },
       include: { organization: { select: { name: true } }, department: { select: { name: true } } },
@@ -144,7 +148,7 @@ export const changeUserRole = async (req: Request, res: Response): Promise<void>
       sendNotFound(res, 'User not found');
       return;
     }
-    const user = await UserService.updateUser(params.id, { role: body.role });
+    const user = await UserService.updateUser(actorFromRequest(req), params.id, { role: body.role });
     sendSuccess(res, { data: serializeUser(user as Record<string, unknown>), message: 'User role updated successfully' });
   } catch (error: any) {
     logger.error({ err: error }, '[changeUserRole]');

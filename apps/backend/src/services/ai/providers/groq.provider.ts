@@ -2,14 +2,16 @@ import OpenAI from 'openai';
 import { AIProvider } from './provider.interface';
 import { env } from '../../../config/env';
 import { logger } from '../../../utils/logger';
+import { PROVIDER_SDK_CLIENT_OPTIONS, providerSignal } from '../request-signal';
 
 export class GroqProvider implements AIProvider {
   private client: OpenAI;
 
   constructor() {
-    this.client = new OpenAI({ 
+    this.client = new OpenAI({
       apiKey: env.GROQ_API_KEY || '',
-      baseURL: 'https://api.groq.com/openai/v1'
+      baseURL: 'https://api.groq.com/openai/v1',
+      ...PROVIDER_SDK_CLIENT_OPTIONS,
     });
   }
 
@@ -43,7 +45,7 @@ export class GroqProvider implements AIProvider {
       temperature: options?.temperature || 0.7,
       max_tokens: options?.maxTokens || 4096,
       response_format: options?.responseFormat,
-    }, { signal });
+    }, { signal: providerSignal(signal) });
     return response.choices[0].message.content;
   }
 
@@ -56,7 +58,7 @@ export class GroqProvider implements AIProvider {
         stream: true,
         temperature: options?.temperature || 0.7,
       },
-      { signal: options?.signal }
+      { signal: providerSignal(options?.signal) }
     );
 
     for await (const chunk of stream) {

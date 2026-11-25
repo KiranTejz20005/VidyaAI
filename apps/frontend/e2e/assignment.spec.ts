@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { E2E_ROLES, missingCredentialsMessage } from './credentials';
 
 /**
  * Critical journey: a teacher creates an assignment.
@@ -12,6 +13,8 @@ import { test, expect } from '@playwright/test';
 test.use({ storageState: 'e2e/.auth/teacher.json' });
 
 test.describe('Assignment creation', () => {
+  test.skip(!E2E_ROLES.teacher.password, missingCredentialsMessage(E2E_ROLES.teacher));
+
   test('teacher can open the create form and submit a new assignment', async ({ page }) => {
     await page.goto('/assignments/create');
 

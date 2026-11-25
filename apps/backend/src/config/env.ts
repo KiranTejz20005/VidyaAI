@@ -68,7 +68,22 @@ const envSchema = z.object({
     .transform((v) => (v && v.trim().length > 5 ? v.trim() : undefined)),
 
   // Security
-  JWT_SECRET: z.string().min(16, 'JWT_SECRET must be at least 16 characters'),
+  JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters'),
+
+  // Google sign-in: comma-separated OAuth client IDs whose tokens are accepted.
+  // Leave empty to disable Google sign-in.
+  GOOGLE_CLIENT_ID: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.split(',').map((s) => s.trim()).filter(Boolean) : [])),
+
+  // Outbound email (SMTP). When SMTP_HOST is unset, emails are not sent and
+  // a redacted notice is logged instead.
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.coerce.number().int().positive().default(587),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  SMTP_FROM: z.string().default('VidyaAI <no-reply@vidyaai.tech>'),
 
   // CORS — comma-separated list of allowed origins (no default, fails if unset in production)
   FRONTEND_URL: z.string().min(1, 'FRONTEND_URL is required (comma-separated)'),

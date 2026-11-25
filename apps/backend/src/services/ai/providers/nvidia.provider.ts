@@ -2,14 +2,16 @@ import OpenAI from 'openai';
 import { AIProvider } from './provider.interface';
 import { env } from '../../../config/env';
 import { logger } from '../../../utils/logger';
+import { PROVIDER_SDK_CLIENT_OPTIONS, providerSignal } from '../request-signal';
 
 export class NvidiaProvider implements AIProvider {
   private client: OpenAI;
 
   constructor() {
-    this.client = new OpenAI({ 
+    this.client = new OpenAI({
       apiKey: env.NVIDIA_API_KEY || '',
-      baseURL: 'https://integrate.api.nvidia.com/v1'
+      baseURL: 'https://integrate.api.nvidia.com/v1',
+      ...PROVIDER_SDK_CLIENT_OPTIONS,
     });
   }
 
@@ -38,7 +40,7 @@ export class NvidiaProvider implements AIProvider {
       temperature: options?.temperature || 0.7,
       max_tokens: options?.maxTokens || 4096,
       response_format: options?.responseFormat,
-    }, { signal });
+    }, { signal: providerSignal(signal) });
     return response.choices[0].message.content;
   }
 
@@ -51,7 +53,7 @@ export class NvidiaProvider implements AIProvider {
         stream: true,
         temperature: options?.temperature || 0.7,
       },
-      { signal: options?.signal }
+      { signal: providerSignal(options?.signal) }
     );
 
     for await (const chunk of stream) {

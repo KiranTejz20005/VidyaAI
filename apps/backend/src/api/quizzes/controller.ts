@@ -1,3 +1,4 @@
+import { randomBytes, randomUUID } from 'crypto';
 import { Request, Response } from 'express';
 import { sendSuccess, sendCreated, sendNoContent } from '../common/response';
 import { ApiError } from '../common/errors';
@@ -15,6 +16,30 @@ import {
 
 import { getStorageAdapter } from '../../services/storage';
 
+interface QuizAttempt {
+  questionId: string;
+  answer: string;
+  isCorrect: boolean;
+}
+
+function normalizeAnswer(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+/** Reads the server-recorded attempts stored on a session. */
+function readAttempts(raw: unknown): QuizAttempt[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (a): a is QuizAttempt =>
+      Boolean(a) && typeof a === 'object' && typeof (a as QuizAttempt).questionId === 'string',
+  );
+}
+
+/** Score is always derived from the answers the server graded, never taken from the client. */
+function scoreFromAttempts(attempts: QuizAttempt[]): number {
+  return attempts.filter((a) => a.isCorrect === true).length;
+}
+
 export const generateQuiz = async (req: Request, res: Response): Promise<void> => {
   const { topic, subject, difficulty, bloomLevel, count } = req.body;
   const orgId = getRequestOrgId(req);
@@ -30,7 +55,7 @@ export const generateQuiz = async (req: Request, res: Response): Promise<void> =
   });
 
   // Persist generated quiz questions to Cloudflare R2 in quizzes/ folder
-  const quizId = `quiz-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+  const quizId = `quiz-${randomUUID()}`;
   const storageKey = `quizzes/${quizId}.json`;
   try {
     const storage = getStorageAdapter();
@@ -80,8 +105,8 @@ export const listSessions = async (req: Request, res: Response): Promise<void> =
 
 export const createSession = async (req: Request, res: Response): Promise<void> => {
   const userId = getRequestUserId(req);
-  const { topic, subject, difficulty, organizationId, totalQuestions } = req.body;
-  const orgId = organizationId ?? getRequestOrgId(req);
+  const { topic, subject, difficulty, totalQuestions } = req.body;
+  const orgId = getRequestOrgId(req);
 
   const session = await (prisma as any).quizSession.create({
     data: {
@@ -122,13 +147,13 @@ export const updateSession = async (req: Request, res: Response): Promise<void> 
   const existing = await prisma.quizSession.findFirst({ where: { id, userId } });
   if (!existing) throw ApiError.notFound('Quiz session not found');
 
-  const updated = await (prisma as any).quizSession.update({
+  // Clients may only report elapsed time; the score is recomputed from the
+  // attempts the server has graded so it cannot be set directly.
+  const updated = await prisma.quizSession.update({
     where: { id },
     data: {
-      ...(req.body.score !== undefined ? { score: req.body.score } : {}),
-      ...(req.body.timeSpent !== undefined ? { timeSpent: req.body.timeSpent } : {}),
-      ...(req.body.attempts !== undefined ? { attempts: req.body.attempts } : {}),
-      ...(req.body.status ? { status: req.body.status } : {}),
+      ...(req.body.timeSpent !== undefined ? { timeTakenSeconds: Math.round(req.body.timeSpent) } : {}),
+      score: scoreFromAttempts(readAttempts(existing.attempts)),
     },
   });
 
@@ -197,7 +222,7 @@ export const shareQuiz = async (req: Request, res: Response): Promise<void> => {
   });
   if (!session) throw ApiError.notFound('Quiz session not found');
 
-  const shareToken = `share_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const shareToken = `share_${randomBytes(24).toString('base64url')}`;
 
   sendCreated(res, {
     shareToken,
@@ -211,8 +236,8 @@ export const getSharedQuiz = async (_req: Request, _res: Response): Promise<void
 
 export const startAdaptiveQuiz = async (req: Request, res: Response): Promise<void> => {
   const userId = getRequestUserId(req);
-  const { topic, subject, initialDifficulty, organizationId } = req.body;
-  const orgId = organizationId ?? getRequestOrgId(req);
+  const { topic, subject, initialDifficulty } = req.body;
+  const orgId = getRequestOrgId(req);
 
   const session = await (prisma as any).quizSession.create({
     data: {
@@ -244,18 +269,31 @@ export const getNextAdaptiveQuestion = async (req: Request, res: Response): Prom
   });
   if (!session) throw ApiError.notFound('Quiz session not found');
 
+  let attempts = readAttempts(session.attempts);
   if (lastQuestionId && lastAnswer) {
-    await (prisma as any).quizSessionQuestion.update({
-      where: { id: lastQuestionId },
-      data: { userAnswer: lastAnswer, isCorrect: undefined },
+    const lastQuestion = await prisma.quizSessionQuestion.findFirst({
+      where: { id: lastQuestionId, sessionId: session.id },
+      select: { id: true, answer: true },
     });
+    if (!lastQuestion) throw ApiError.notFound('Quiz question not found');
+
+    const attempt: QuizAttempt = {
+      questionId: lastQuestion.id,
+      answer: String(lastAnswer),
+      isCorrect: normalizeAnswer(lastAnswer) === normalizeAnswer(lastQuestion.answer),
+    };
+    attempts = [...attempts.filter((a) => a.questionId !== lastQuestion.id), attempt];
   }
 
   const nextQuestion = await AdaptiveQuizService.generateAdaptiveQuestion(sessionId);
 
-  await (prisma as any).quizSession.update({
+  await prisma.quizSession.update({
     where: { id: sessionId },
-    data: { totalQuestions: { increment: 1 } },
+    data: {
+      totalQuestions: { increment: 1 },
+      attempts: attempts as unknown as object[],
+      score: scoreFromAttempts(attempts),
+    },
   });
 
   sendSuccess(res, { data: { question: serializeQuizQuestion(nextQuestion) } });

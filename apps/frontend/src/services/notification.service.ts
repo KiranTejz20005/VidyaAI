@@ -1,4 +1,6 @@
 import { api } from '@/lib/api';
+import { userScopedKey } from '@/lib/user-storage';
+import { useAuthStore } from '@/store/auth.store';
 
 export interface RealNotificationItem {
   id: string;
@@ -12,6 +14,10 @@ export interface RealNotificationItem {
 }
 
 const STORAGE_KEY = 'vidya_notifications_v2';
+
+function storageKey(): string {
+  return userScopedKey(STORAGE_KEY, useAuthStore.getState().user?.id);
+}
 
 const defaultVidyaNotifications: RealNotificationItem[] = [
   {
@@ -59,7 +65,7 @@ const defaultVidyaNotifications: RealNotificationItem[] = [
 function getStoredNotifications(): RealNotificationItem[] | null {
   if (typeof window === 'undefined') return null;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey());
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : null;
@@ -71,7 +77,7 @@ function getStoredNotifications(): RealNotificationItem[] | null {
 function setStoredNotifications(items: RealNotificationItem[]) {
   if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+    localStorage.setItem(storageKey(), JSON.stringify(items));
   } catch {
     // Ignore storage quota errors
   }

@@ -46,4 +46,4 @@ USER appuser
 EXPOSE 3001
 
 # Start the Node process
-CMD ["node", "apps/backend/dist/index.js"]
+CMD ["node", "apps/backend/dist/app.js"]

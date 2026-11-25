@@ -2,22 +2,71 @@ import { Request, Response } from 'express';
 import fs from 'fs';
 import prisma from '../../config/prisma';
 import { getR2Storage } from '../../services/storage/r2-storage';
-import { generateR2ObjectKey, parseR2ObjectKey, StorageScope } from '../../services/storage/key-generator';
-import { StorageRbacService, StorageUserContext } from '../../services/storage/storage-rbac.service';
+import { generateR2ObjectKey, normalizeStorageKey, StorageScope } from '../../services/storage/key-generator';
+import { StorageRbacService, StorageUserContext, effectiveOrgId } from '../../services/storage/storage-rbac.service';
+import {
+  MAX_UPLOAD_BYTES,
+  buildContentDisposition,
+  isInlineSafeContentType,
+  resolveFileType,
+  storedContentDisposition,
+} from '../../services/storage/file-policy';
+import { normalizeRole } from '../../security/request-context';
 import { sendSuccess, sendCreated, sendNoContent } from '../common/response';
 import { ApiError } from '../common/errors';
 import { parsePagination, buildPagination } from '../common/pagination';
 import { logger } from '../../utils/logger';
+import { storageScopeEnum } from './validators';
+
+const STORED_FILE_SORT_FIELDS = ['createdAt', 'updatedAt', 'originalName', 'sizeBytes'] as const;
+
+/** Scopes teachers may list across their organization (shared teaching material). */
+const TEACHER_LISTABLE_SCOPES = ['courses', 'syllabus', 'assignments', 'blogs', 'documents'];
 
 function getUserContext(req: Request): StorageUserContext {
-  const user = (req as any).user;
+  const user = req.user;
   if (!user || !user.id) {
     throw ApiError.unauthorized('Authentication required');
   }
+  const role = normalizeRole(user.role);
+  const orgId = role === 'SUPER_ADMIN'
+    ? user.activeOrganizationId || user.organizationId
+    : user.organizationId || user.activeOrganizationId;
   return {
     id: user.id,
-    role: user.role,
-    organizationId: user.organizationId || (req as any).organizationId || null,
+    role,
+    organizationId: effectiveOrgId(orgId),
+    email: user.email ?? null,
+  };
+}
+
+async function assertCanUpload(user: StorageUserContext, scope: string, entityId: string): Promise<void> {
+  if (!StorageRbacService.canUploadToScope(user, scope, entityId)) {
+    throw ApiError.forbidden(`You do not have permission to upload files to ${scope}`);
+  }
+  if (!(await StorageRbacService.canUploadToEntity(user, scope, entityId))) {
+    throw ApiError.forbidden(`You do not have permission to upload files to ${scope}`);
+  }
+}
+
+function removeTempFile(tempPath: string | undefined): void {
+  if (tempPath && fs.existsSync(tempPath)) {
+    try {
+      fs.unlinkSync(tempPath);
+    } catch (err) {
+      logger.warn(`[storage] Could not remove temp upload: ${err}`);
+    }
+  }
+}
+
+/** Signed URL options that force a download for anything not safe to render inline. */
+function downloadUrlOptions(originalName: string, mimeType: string) {
+  const resolved = resolveFileType(originalName);
+  const inline = Boolean(resolved?.inline) && isInlineSafeContentType(mimeType);
+  if (inline) return {};
+  return {
+    responseContentType: resolved?.contentType ?? 'application/octet-stream',
+    responseContentDisposition: buildContentDisposition(originalName, false),
   };
 }
 
@@ -27,13 +76,21 @@ function getUserContext(req: Request): StorageUserContext {
  */
 export async function presignUpload(req: Request, res: Response): Promise<void> {
   const user = getUserContext(req);
-  const { filename, mimeType, sizeBytes, scope, entityId, subFolder, isPublic } = req.body;
+  const { filename, sizeBytes, scope, entityId, subFolder, isPublic } = req.body;
 
-  // 1. RBAC authorization for scope
-  const allowed = StorageRbacService.canUploadToScope(user, scope, entityId);
-  if (!allowed) {
-    throw ApiError.forbidden(`You do not have permission to upload files to ${scope}/${entityId}`);
+  const fileType = resolveFileType(filename);
+  if (!fileType) {
+    throw ApiError.badRequest('This file type is not allowed');
   }
+  if (typeof sizeBytes !== 'number' || sizeBytes <= 0 || sizeBytes > MAX_UPLOAD_BYTES) {
+    throw ApiError.badRequest('File size is not allowed');
+  }
+  if (isPublic && !StorageRbacService.canMarkPublic(user)) {
+    throw ApiError.forbidden('Only staff can publish files to the organization');
+  }
+
+  // 1. RBAC authorization for scope and target entity
+  await assertCanUpload(user, scope, entityId);
 
   // 2. Generate deterministic R2 key
   const { key, fileId } = generateR2ObjectKey({
@@ -43,11 +100,15 @@ export async function presignUpload(req: Request, res: Response): Promise<void> 
     subFolder,
   });
 
+  const contentDisposition = storedContentDisposition(filename, fileType);
   const r2 = getR2Storage();
   const expiresInSeconds = 900; // 15 minutes
-  const uploadUrl = await r2.getPresignedUploadUrl(key, mimeType, expiresInSeconds);
+  const uploadUrl = await r2.getPresignedUploadUrl(key, fileType.contentType, expiresInSeconds, {
+    contentLength: sizeBytes,
+    contentDisposition,
+  });
 
-  // Pre-create metadata record in pending/active state
+  // Pre-create metadata record
   await prisma.storedFile.upsert({
     where: { key },
     create: {
@@ -55,17 +116,17 @@ export async function presignUpload(req: Request, res: Response): Promise<void> 
       key,
       bucket: process.env.R2_BUCKET_NAME || 'vidyaai-uploads',
       originalName: filename,
-      mimeType,
+      mimeType: fileType.contentType,
       sizeBytes,
       scope,
       ownerId: user.id,
-      organizationId: user.organizationId,
+      organizationId: user.organizationId ?? null,
       entityId,
       isPublic: Boolean(isPublic),
     },
     update: {
       originalName: filename,
-      mimeType,
+      mimeType: fileType.contentType,
       sizeBytes,
     },
   });
@@ -75,6 +136,11 @@ export async function presignUpload(req: Request, res: Response): Promise<void> 
     fileId,
     key,
     expiresInSeconds,
+    requiredHeaders: {
+      'Content-Type': fileType.contentType,
+      'Content-Length': String(sizeBytes),
+      ...(contentDisposition ? { 'Content-Disposition': contentDisposition } : {}),
+    },
   });
 }
 
@@ -88,87 +154,95 @@ export async function directUpload(req: Request, res: Response): Promise<void> {
     throw ApiError.badRequest('No file uploaded');
   }
 
-  const scope = (req.body.scope || 'documents') as StorageScope;
-  const entityId = req.body.entityId || user.id;
-  const isPublic = req.body.isPublic === 'true' || req.body.isPublic === true;
-
-  // 1. RBAC Check
-  const allowed = StorageRbacService.canUploadToScope(user, scope, entityId);
-  if (!allowed) {
-    throw ApiError.forbidden(`You do not have permission to upload files to ${scope}/${entityId}`);
-  }
-
-  const { originalname, mimetype, size, path: tempPath } = req.file;
-
-  // 2. Generate R2 key
-  const { key, fileId } = generateR2ObjectKey({
-    scope,
-    entityId,
-    filename: originalname,
-  });
-
-  const r2 = getR2Storage();
-  let buffer: Buffer;
+  const { originalname, size, path: tempPath } = req.file;
 
   try {
+    const parsedScope = storageScopeEnum.safeParse(req.body.scope || 'documents');
+    if (!parsedScope.success) {
+      throw ApiError.badRequest('Invalid storage scope');
+    }
+    const scope = parsedScope.data as StorageScope;
+    const rawEntityId = req.body.entityId ?? user.id;
+    if (typeof rawEntityId !== 'string' || rawEntityId.length === 0 || rawEntityId.length > 100) {
+      throw ApiError.badRequest('Invalid entityId');
+    }
+    const entityId = rawEntityId;
+    const isPublic = req.body.isPublic === 'true' || req.body.isPublic === true;
+
+    const fileType = resolveFileType(originalname);
+    if (!fileType) {
+      throw ApiError.badRequest('This file type is not allowed');
+    }
+    if (size > MAX_UPLOAD_BYTES) {
+      throw ApiError.badRequest('File size is not allowed');
+    }
+    if (isPublic && !StorageRbacService.canMarkPublic(user)) {
+      throw ApiError.forbidden('Only staff can publish files to the organization');
+    }
+
+    // 1. RBAC Check
+    await assertCanUpload(user, scope, entityId);
+
+    // 2. Generate R2 key
+    const { key, fileId } = generateR2ObjectKey({
+      scope,
+      entityId,
+      filename: originalname,
+    });
+
+    let buffer: Buffer;
     if (tempPath && fs.existsSync(tempPath)) {
       buffer = fs.readFileSync(tempPath);
     } else if (req.file.buffer) {
       buffer = req.file.buffer;
     } else {
-      throw new Error('Unable to read uploaded file buffer');
+      throw ApiError.badRequest('Failed to read uploaded file');
     }
-  } catch (err: any) {
-    throw ApiError.badRequest(`Failed to read file: ${err.message}`);
-  }
 
-  // 3. Upload to Cloudflare R2
-  try {
-    await r2.save(key, buffer, mimetype);
-  } catch (r2Err: any) {
-    logger.error(`[directUpload] R2 upload failed for key=${key}: ${r2Err.message}`);
-    throw ApiError.internal('Failed to upload file to Cloudflare R2 storage');
-  } finally {
-    // Clean up local temp file
-    if (tempPath && fs.existsSync(tempPath)) {
-      try {
-        fs.unlinkSync(tempPath);
-      } catch {
-        // ignore unlink error
-      }
+    // 3. Upload to Cloudflare R2 with a server-derived Content-Type
+    const r2 = getR2Storage();
+    try {
+      await r2.save(key, buffer, fileType.contentType, {
+        contentDisposition: storedContentDisposition(originalname, fileType),
+      });
+    } catch (r2Err: any) {
+      logger.error(`[directUpload] R2 upload failed for key=${key}: ${r2Err.message}`);
+      throw ApiError.internal('Failed to upload file to storage');
     }
-  }
 
-  // 4. Save metadata to DB (with rollback if DB fails)
-  let record;
-  try {
-    record = await prisma.storedFile.create({
-      data: {
-        id: fileId,
-        key,
-        bucket: process.env.R2_BUCKET_NAME || 'vidyaai-uploads',
-        originalName: originalname,
-        mimeType: mimetype,
-        sizeBytes: size,
-        scope,
-        ownerId: user.id,
-        organizationId: user.organizationId,
-        entityId,
-        isPublic,
-      },
+    // 4. Save metadata to DB (with rollback if DB fails)
+    let record;
+    try {
+      record = await prisma.storedFile.create({
+        data: {
+          id: fileId,
+          key,
+          bucket: process.env.R2_BUCKET_NAME || 'vidyaai-uploads',
+          originalName: originalname,
+          mimeType: fileType.contentType,
+          sizeBytes: buffer.length,
+          scope,
+          ownerId: user.id,
+          organizationId: user.organizationId ?? null,
+          entityId,
+          isPublic,
+        },
+      });
+    } catch (dbErr: any) {
+      logger.error(`[directUpload] DB record creation failed, rolling back R2 key=${key}: ${dbErr.message}`);
+      await r2.delete(key).catch(() => {});
+      throw ApiError.internal('Failed to save file metadata');
+    }
+
+    const downloadUrl = await r2.getSignedDownloadUrl(key, 900, downloadUrlOptions(originalname, fileType.contentType));
+
+    sendCreated(res, {
+      ...record,
+      downloadUrl,
     });
-  } catch (dbErr: any) {
-    logger.error(`[directUpload] DB record creation failed, rolling back R2 key=${key}: ${dbErr.message}`);
-    await r2.delete(key).catch(() => {});
-    throw ApiError.internal('Failed to save file metadata');
+  } finally {
+    removeTempFile(tempPath);
   }
-
-  const downloadUrl = await r2.getSignedDownloadUrl(key, 900);
-
-  sendCreated(res, {
-    ...record,
-    downloadUrl,
-  });
 }
 
 /**
@@ -191,7 +265,7 @@ export async function getFileAccess(req: Request, res: Response): Promise<void> 
 
   const r2 = getR2Storage();
   const expiresInSeconds = 900;
-  const downloadUrl = await r2.getSignedDownloadUrl(file.key, expiresInSeconds);
+  const downloadUrl = await r2.getSignedDownloadUrl(file.key, expiresInSeconds, downloadUrlOptions(file.originalName, file.mimeType));
 
   sendSuccess(res, {
     data: {
@@ -208,53 +282,41 @@ export async function getFileAccess(req: Request, res: Response): Promise<void> 
 
 /**
  * GET /api/v1/storage/by-key
- * Access file via object key with strict RBAC enforcement
+ * Access a file by object key. Only keys with a StoredFile record are served,
+ * so authorization is always evaluated against the record's real owner and
+ * tenant.
  */
 export async function getFileByKey(req: Request, res: Response): Promise<void> {
   const user = getUserContext(req);
-  const key = req.query.key as string;
-  if (!key) {
+  const rawKey = req.query.key;
+  if (typeof rawKey !== 'string' || !rawKey) {
     throw ApiError.badRequest('Key query parameter is required');
   }
 
-  let file = await prisma.storedFile.findUnique({ where: { key } });
-
-  // If not found in DB directly, parse key structure and check if user has access to scope
-  if (!file) {
-    const parsed = parseR2ObjectKey(key);
-    if (!parsed) {
-      throw ApiError.notFound('File key not found');
-    }
-    file = {
-      id: parsed.fileId,
-      key,
-      bucket: process.env.R2_BUCKET_NAME || 'vidyaai-uploads',
-      originalName: parsed.filename,
-      mimeType: 'application/octet-stream',
-      sizeBytes: 0,
-      scope: parsed.scope,
-      ownerId: parsed.scope === 'students' || parsed.scope === 'teachers' || parsed.scope === 'admins' || parsed.scope === 'documents' ? parsed.entityId : user.id,
-      organizationId: user.organizationId,
-      entityId: parsed.entityId,
-      isPublic: false,
-      metadata: {},
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    } as any;
+  let key: string;
+  try {
+    key = normalizeStorageKey(rawKey);
+  } catch {
+    throw ApiError.badRequest('Invalid key');
   }
 
-  const canAccess = await StorageRbacService.canAccessFile(user, 'file:read', file!);
+  const file = await prisma.storedFile.findUnique({ where: { key } });
+  if (!file) {
+    throw ApiError.notFound('File not found');
+  }
+
+  const canAccess = await StorageRbacService.canAccessFile(user, 'file:read', file);
   if (!canAccess) {
     throw ApiError.forbidden('You do not have permission to access this file');
   }
 
   const r2 = getR2Storage();
   const expiresInSeconds = 900;
-  const downloadUrl = await r2.getSignedDownloadUrl(key, expiresInSeconds);
+  const downloadUrl = await r2.getSignedDownloadUrl(file.key, expiresInSeconds, downloadUrlOptions(file.originalName, file.mimeType));
 
   sendSuccess(res, {
     data: {
-      key,
+      key: file.key,
       downloadUrl,
       expiresInSeconds,
     },
@@ -288,31 +350,41 @@ export async function deleteFile(req: Request, res: Response): Promise<void> {
 
 /**
  * GET /api/v1/storage
- * List stored files with RBAC filtering
+ * List stored files, always confined to the caller's organization
+ * (SUPER_ADMIN excepted). Students see their own files plus files published to
+ * their organization; teachers additionally see shared teaching material.
  */
 export async function listFiles(req: Request, res: Response): Promise<void> {
   const user = getUserContext(req);
-  const { page, limit, sort, order } = parsePagination(req);
-  const scope = req.query.scope as string | undefined;
-  const entityId = req.query.entityId as string | undefined;
+  const { page, limit, sort, order } = parsePagination(req, STORED_FILE_SORT_FIELDS);
+  const scope = typeof req.query.scope === 'string' ? req.query.scope : undefined;
+  const entityId = typeof req.query.entityId === 'string' ? req.query.entityId : undefined;
 
   const where: any = {};
-
   if (scope) where.scope = scope;
   if (entityId) where.entityId = entityId;
 
-  // Non-super-admins only see files in their org or owned by them
   if (user.role !== 'SUPER_ADMIN') {
-    if (user.role === 'STUDENT') {
+    if (!user.organizationId) {
+      where.ownerId = user.id;
+    } else if (user.role === 'ADMIN') {
+      where.organizationId = user.organizationId;
+    } else if (user.role === 'TEACHER') {
+      where.organizationId = user.organizationId;
+      where.OR = [
+        { ownerId: user.id },
+        { isPublic: true },
+        { scope: { in: TEACHER_LISTABLE_SCOPES } },
+      ];
+    } else {
+      where.organizationId = user.organizationId;
       where.OR = [
         { ownerId: user.id },
         { isPublic: true },
       ];
-    } else if (user.organizationId) {
-      where.organizationId = user.organizationId;
-    } else {
-      where.ownerId = user.id;
     }
+  } else if (user.organizationId) {
+    where.organizationId = user.organizationId;
   }
 
   const [files, total] = await Promise.all([

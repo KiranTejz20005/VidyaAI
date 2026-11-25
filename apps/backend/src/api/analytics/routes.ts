@@ -3,7 +3,7 @@ import { authenticate } from '../../middlewares/auth.middleware';
 import { requireRole } from '../../security/role.middleware';
 import { validate } from '../../middlewares/validate.middleware';
 import { asyncHandler } from '../../utils/async-handler';
-import { exportTypeParamSchema, trendQuerySchema } from './validators';
+import { studentPerformanceQuerySchema } from './validators';
 import {
   getDashboard,
   getAssignmentAnalytics,
@@ -12,22 +12,19 @@ import {
   getTeacherPerformance,
   getUsageStats,
   getAiUsage,
-  getTrends,
-  exportAnalytics,
 } from './controller';
 
 const router = Router();
 
 router.use(authenticate);
 
-router.get('/dashboard', asyncHandler(getDashboard));
-router.get('/assignments', asyncHandler(getAssignmentAnalytics));
-router.get('/quizzes', asyncHandler(getQuizAnalytics));
-router.get('/students', asyncHandler(getStudentPerformance));
-router.get('/teachers', asyncHandler(getTeacherPerformance));
-router.get('/usage', asyncHandler(getUsageStats));
-router.get('/ai-usage', asyncHandler(getAiUsage));
-router.get('/trends', validate(trendQuerySchema), asyncHandler(getTrends));
-router.get('/export/:type', validate(exportTypeParamSchema), requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandler(exportAnalytics));
+router.get('/dashboard', requireRole('ADMIN'), asyncHandler(getDashboard));
+router.get('/assignments', requireRole('TEACHER', 'ADMIN'), asyncHandler(getAssignmentAnalytics));
+router.get('/quizzes', requireRole('TEACHER', 'ADMIN'), asyncHandler(getQuizAnalytics));
+// Students may read only their own performance; staff only students of their organization.
+router.get('/students', validate(studentPerformanceQuerySchema), asyncHandler(getStudentPerformance));
+router.get('/teachers', requireRole('ADMIN'), asyncHandler(getTeacherPerformance));
+router.get('/usage', requireRole('ADMIN'), asyncHandler(getUsageStats));
+router.get('/ai-usage', requireRole('ADMIN'), asyncHandler(getAiUsage));
 
 export default router;

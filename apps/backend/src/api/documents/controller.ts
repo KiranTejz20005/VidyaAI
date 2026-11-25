@@ -7,6 +7,13 @@ import { ApiError } from '../common/errors';
 import { ingestionQueue } from '../../queues/ingestion.queue';
 import { serializeDocument } from './serializers';
 
+/** Looks a document up inside the caller's organization; other tenants' ids behave as not found. */
+async function findOwnDocument(req: Request, id: string) {
+  const document = await prisma.knowledgeDocument.findFirst({ where: { id, organizationId: requireRequestOrgId(req) } });
+  if (!document) throw ApiError.notFound('Document not found');
+  return document;
+}
+
 export async function uploadDocument(req: Request, res: Response): Promise<void> {
   const orgId = requireRequestOrgId(req);
 
@@ -28,14 +35,13 @@ export async function uploadDocument(req: Request, res: Response): Promise<void>
 export async function parseDocument(req: Request, res: Response): Promise<void> {
   const { documentId } = req.body;
 
-  const document = await prisma.knowledgeDocument.findUnique({ where: { id: documentId } });
-  if (!document) throw ApiError.notFound('Document not found');
+  await findOwnDocument(req, documentId);
 
-  const job = await ingestionQueue.add('parse-document', { documentId });
+  const job = await ingestionQueue.add('process-document', { documentId }, { jobId: `doc-${documentId}-${Date.now()}` });
 
-  await (prisma as any).knowledgeDocument.update({
+  await prisma.knowledgeDocument.update({
     where: { id: documentId },
-    data: { status: 'parsing' },
+    data: { status: 'GENERATING' },
   });
 
   sendAccepted(res, { jobId: job.id, documentId, status: 'queued' });
@@ -68,8 +74,7 @@ export async function listDocuments(req: Request, res: Response): Promise<void> 
 export async function getDocument(req: Request, res: Response): Promise<void> {
   const { id } = req.params;
 
-  const document = await prisma.knowledgeDocument.findUnique({ where: { id } });
-  if (!document) throw ApiError.notFound('Document not found');
+  const document = await findOwnDocument(req, id);
 
   sendSuccess(res, { data: serializeDocument(document as any) });
 }
@@ -77,8 +82,7 @@ export async function getDocument(req: Request, res: Response): Promise<void> {
 export async function deleteDocument(req: Request, res: Response): Promise<void> {
   const { id } = req.params;
 
-  const existing = await prisma.knowledgeDocument.findUnique({ where: { id } });
-  if (!existing) throw ApiError.notFound('Document not found');
+  await findOwnDocument(req, id);
 
   await prisma.knowledgeDocument.delete({ where: { id } });
 
@@ -88,19 +92,13 @@ export async function deleteDocument(req: Request, res: Response): Promise<void>
 export async function processDocument(req: Request, res: Response): Promise<void> {
   const { id } = req.params;
 
-  const document = await prisma.knowledgeDocument.findUnique({ where: { id } });
-  if (!document) throw ApiError.notFound('Document not found');
+  const document = await findOwnDocument(req, id);
 
-  const job = await ingestionQueue.add('process-document', {
-    documentId: id,
-    fileUrl: document.fileUrl,
-    organizationId: document.organizationId,
-    filename: document.filename,
-  });
+  const job = await ingestionQueue.add('process-document', { documentId: id }, { jobId: `doc-${id}-${Date.now()}` });
 
-  await (prisma as any).knowledgeDocument.update({
+  await prisma.knowledgeDocument.update({
     where: { id },
-    data: { status: 'processing' },
+    data: { status: 'GENERATING' },
   });
 
   sendAccepted(res, { jobId: job.id, documentId: id, status: 'queued' });
@@ -109,8 +107,7 @@ export async function processDocument(req: Request, res: Response): Promise<void
 export async function checkDocumentJob(req: Request, res: Response): Promise<void> {
   const { id, jobId } = req.params;
 
-  const document = await prisma.knowledgeDocument.findUnique({ where: { id } });
-  if (!document) throw ApiError.notFound('Document not found');
+  const document = await findOwnDocument(req, id);
 
   const job = await ingestionQueue.getJob(jobId);
   if (!job) throw ApiError.notFound('Job not found');

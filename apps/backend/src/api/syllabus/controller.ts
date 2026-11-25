@@ -1,18 +1,32 @@
 import { Request, Response } from 'express';
 import prisma from '../../config/prisma';
-import { getRequestUserId } from '../../security/request-context';
+import { getRequestUserId, getRequestOrgId } from '../../security/request-context';
+import { syllabusReadWhere, syllabusWriteWhere } from '../../services/syllabus-access.service';
 import { parsePagination, buildPagination } from '../common/pagination';
 import { sendSuccess, sendCreated } from '../common/response';
 import { ApiError } from '../common/errors';
 import { serializeSyllabus, serializeTopicResponse } from './serializers';
 import type { CreateSyllabusDto, UpdateSyllabusDto, CreateTopicDto, UpdateTopicDto, UpdateSubtopicsDto } from './dto';
 
+async function assertWritableSyllabus(req: Request, id: string): Promise<void> {
+  const existing = await prisma.syllabus.findFirst({ where: { id, ...syllabusWriteWhere(req) }, select: { id: true } });
+  if (!existing) throw ApiError.notFound('Syllabus not found');
+}
+
+async function assertWritableTopic(req: Request, topicId: string): Promise<void> {
+  const existing = await prisma.syllabusTopic.findFirst({
+    where: { id: topicId, syllabus: syllabusWriteWhere(req) },
+    select: { id: true },
+  });
+  if (!existing) throw ApiError.notFound('Topic not found');
+}
+
 export async function listSyllabusEntries(req: Request, res: Response): Promise<void> {
   const { page, limit, sort, order, search } = parsePagination(req);
   const subject = req.query.subject as string | undefined;
   const status = req.query.status as string | undefined;
 
-  const where: any = {};
+  const where: any = { AND: [syllabusReadWhere(req)] };
   if (search) {
     where.OR = [
       { title: { contains: search, mode: 'insensitive' } },
@@ -55,6 +69,7 @@ export async function createSyllabusEntry(req: Request, res: Response): Promise<
       grade: body.grade,
       status: 'active',
       userId,
+      organizationId: getRequestOrgId(req) ?? null,
       topics: body.topics?.length
         ? {
             create: body.topics.map((t, idx) => ({
@@ -89,8 +104,8 @@ export async function createSyllabusEntry(req: Request, res: Response): Promise<
 export async function getSyllabusEntry(req: Request, res: Response): Promise<void> {
   const { id } = req.params;
 
-  const syllabus = await prisma.syllabus.findUnique({
-    where: { id },
+  const syllabus = await prisma.syllabus.findFirst({
+    where: { id, ...syllabusReadWhere(req) },
     include: {
       topics: {
         orderBy: { topicOrder: 'asc' },
@@ -108,8 +123,7 @@ export async function updateSyllabus(req: Request, res: Response): Promise<void>
   const { id } = req.params;
   const body = req.body as UpdateSyllabusDto;
 
-  const existing = await prisma.syllabus.findUnique({ where: { id } });
-  if (!existing) throw ApiError.notFound('Syllabus not found');
+  await assertWritableSyllabus(req, id);
 
   const syllabus = await prisma.syllabus.update({
     where: { id },
@@ -133,8 +147,7 @@ export async function updateSyllabus(req: Request, res: Response): Promise<void>
 export async function deleteSyllabusEntry(req: Request, res: Response): Promise<void> {
   const { id } = req.params;
 
-  const existing = await prisma.syllabus.findUnique({ where: { id } });
-  if (!existing) throw ApiError.notFound('Syllabus not found');
+  await assertWritableSyllabus(req, id);
 
   await prisma.syllabus.delete({ where: { id } });
 
@@ -145,8 +158,7 @@ export async function addTopic(req: Request, res: Response): Promise<void> {
   const { id } = req.params;
   const body = req.body as CreateTopicDto;
 
-  const syllabus = await prisma.syllabus.findUnique({ where: { id } });
-  if (!syllabus) throw ApiError.notFound('Syllabus not found');
+  await assertWritableSyllabus(req, id);
 
   const count = await prisma.syllabusTopic.count({ where: { syllabusId: id } });
 
@@ -177,8 +189,7 @@ export async function updateTopic(req: Request, res: Response): Promise<void> {
   const { topicId } = req.params;
   const body = req.body as UpdateTopicDto;
 
-  const existing = await prisma.syllabusTopic.findUnique({ where: { id: topicId } });
-  if (!existing) throw ApiError.notFound('Topic not found');
+  await assertWritableTopic(req, topicId);
 
   const topic = await prisma.syllabusTopic.update({
     where: { id: topicId },
@@ -197,8 +208,7 @@ export async function updateTopic(req: Request, res: Response): Promise<void> {
 export async function removeTopic(req: Request, res: Response): Promise<void> {
   const { topicId } = req.params;
 
-  const existing = await prisma.syllabusTopic.findUnique({ where: { id: topicId } });
-  if (!existing) throw ApiError.notFound('Topic not found');
+  await assertWritableTopic(req, topicId);
 
   await prisma.syllabusTopic.delete({ where: { id: topicId } });
 
@@ -209,8 +219,7 @@ export async function updateSubtopics(req: Request, res: Response): Promise<void
   const { topicId } = req.params;
   const body = req.body as UpdateSubtopicsDto;
 
-  const topic = await prisma.syllabusTopic.findUnique({ where: { id: topicId } });
-  if (!topic) throw ApiError.notFound('Topic not found');
+  await assertWritableTopic(req, topicId);
 
   const existingSubtopicIds = (
     await prisma.syllabusSubtopic.findMany({ where: { topicId }, select: { id: true } })
@@ -221,7 +230,7 @@ export async function updateSubtopics(req: Request, res: Response): Promise<void
 
   await prisma.$transaction(async (tx) => {
     if (toDelete.length > 0) {
-      await tx.syllabusSubtopic.deleteMany({ where: { id: { in: toDelete } } });
+      await tx.syllabusSubtopic.deleteMany({ where: { id: { in: toDelete }, topicId } });
     }
 
     for (let i = 0; i < body.subtopics.length; i++) {

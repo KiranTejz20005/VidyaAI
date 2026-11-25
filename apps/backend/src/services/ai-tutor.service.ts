@@ -279,6 +279,8 @@ ${dynamicContext}
         yield { type: 'token', token };
       }
     } catch (streamErr) {
+      // Client went away: do not fall back to a second LLM call or persist a reply.
+      if (signal?.aborted) throw streamErr;
       if (!fullText) {
         try {
           const genResult = await AIOrchestrator.generate({

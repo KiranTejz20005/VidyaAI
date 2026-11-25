@@ -6,8 +6,9 @@ import { useRouter, useParams } from 'next/navigation';
 import { PageHeader } from '@/design-system/PageHeader';
 import { Card } from '@/design-system/Card';
 import { Button } from '@/design-system/Button';
-import { FileText, CheckCircle2, AlertCircle, ChevronRight, Sparkles } from 'lucide-react';
+import { FileText, CheckCircle2, AlertCircle, ChevronRight, Sparkles, LayoutDashboard } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { bulkEvaluate, getBulkEvaluateJobStatus, listSubmissionsForGrading } from '@/services/grading.service';
 
 interface Submission {
   id: string;
@@ -28,11 +29,24 @@ export default function SubmissionsListPage() {
   const fetchSubmissions = async () => {
     try {
       setLoading(true);
-      const res = await api.get(`/grader/assignments/${assignmentId}/submissions`);
-      if (res.data?.success) {
-        setSubmissions(res.data.data);
+      try {
+        const data = await listSubmissionsForGrading(assignmentId);
+        setSubmissions(
+          data.map((s: any) => ({
+            id: s.id,
+            studentId: s.studentId,
+            studentName: s.studentName || s.student?.name || 'Student',
+            status: s.status,
+            submittedAt: s.submittedAt || s.createdAt,
+            evaluations: s.evaluations || [],
+          })),
+        );
+      } catch {
+        // Fallback to legacy grader route if gateway shape differs
+        const res = await api.get(`/grader/assignments/${assignmentId}/submissions`);
+        if (res.data?.success) setSubmissions(res.data.data);
       }
-    } catch (err) {
+    } catch {
       toast.error('Failed to load submissions');
     } finally {
       setLoading(false);
@@ -44,15 +58,36 @@ export default function SubmissionsListPage() {
   }, [assignmentId]);
 
   const handleBulkGrade = async () => {
-    toast.success('Initiating Bulk AI Grading...');
+    toast.loading('Queuing bulk AI grading...', { id: 'bulk-grade' });
     try {
-      const res = await api.post(`/grader/assignments/${assignmentId}/bulk-evaluate`);
-      if (res.data?.success) {
-        toast.success(res.data.message || 'Assignments graded successfully!');
-        fetchSubmissions();
+      const { jobId } = await bulkEvaluate(assignmentId);
+      toast.success(`Bulk job queued (${jobId.slice(0, 8)}…)`, { id: 'bulk-grade' });
+      // Poll briefly then refresh list — processing continues in the worker
+      for (let i = 0; i < 5; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        try {
+          const status = await getBulkEvaluateJobStatus(jobId);
+          if (status && (status as any).status && ['completed', 'COMPLETED', 'failed', 'FAILED'].includes(String((status as any).status))) {
+            break;
+          }
+        } catch {
+          break;
+        }
       }
+      fetchSubmissions();
     } catch (err: any) {
-      toast.error(err.response?.data?.error || 'Bulk grading failed');
+      // Legacy fallback preserves existing exams if gateway bulk is unavailable
+      try {
+        const res = await api.post(`/grader/assignments/${assignmentId}/bulk-evaluate`);
+        if (res.data?.success) {
+          toast.success(res.data.message || 'Bulk grading started', { id: 'bulk-grade' });
+          fetchSubmissions();
+          return;
+        }
+      } catch {
+        /* fall through */
+      }
+      toast.error(err.response?.data?.error || 'Bulk grading failed', { id: 'bulk-grade' });
     }
   };
 
@@ -69,7 +104,14 @@ export default function SubmissionsListPage() {
           title="Student Submissions"
           subtitle={`Manage and grade student work.`}
         />
-        <div style={{ display: 'flex', gap: 12 }}>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <Button
+            variant="outline"
+            onClick={() => router.push(`/teacher/assessments/${assignmentId}/bulk`)}
+          >
+            <LayoutDashboard size={16} style={{ marginRight: 8 }} aria-hidden />
+            Bulk review dashboard
+          </Button>
           {pendingCount > 0 && (
             <Button variant="outline" onClick={handleBulkGrade}>
               <Sparkles size={16} style={{ marginRight: 8, color: 'var(--brand)' }} />

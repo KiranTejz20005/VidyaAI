@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { logger } from '../../utils/logger';
 import { OrganizationService } from '../../services/admin/organization.service';
+import { actorFromRequest } from '../../services/admin/admin-scope';
 import { DepartmentService } from '../../services/admin/department.service';
 import { sendSuccess, sendCreated, sendError, sendNotFound, sendBadRequest } from '../common/response';
 import { createOrganizationSchema, updateOrganizationSchema, createDepartmentSchema } from './validators';
@@ -54,7 +55,7 @@ export const updateOrganization = async (req: Request, res: Response): Promise<v
       sendNotFound(res, 'Organization not found');
       return;
     }
-    const updated = await OrganizationService.updateOrganization(params.id, body);
+    const updated = await OrganizationService.updateOrganization(actorFromRequest(req), params.id, body);
     sendSuccess(res, { data: serializeOrganization(updated as Record<string, unknown>), message: 'Organization updated successfully' });
   } catch (error: any) {
     logger.error({ err: error }, '[updateOrganization]');

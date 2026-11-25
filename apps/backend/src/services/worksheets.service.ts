@@ -19,6 +19,7 @@ export interface WorksheetCreateInput {
   topic: string;
   difficulty: 'EASY' | 'MEDIUM' | 'HARD';
   userId: string;
+  organizationId?: string | null;
 }
 
 export const createWorksheet = async (input: WorksheetCreateInput) => {
@@ -70,6 +71,7 @@ Output JSON format exactly like:
       content: contentVal,
       answerKey: answerKeyVal,
       userId: input.userId,
+      organizationId: input.organizationId ?? null,
     },
   });
 
@@ -83,14 +85,17 @@ export const listWorksheets = async (userId: string) => {
   });
 };
 
-export const getWorksheetDetails = async (id: string) => {
-  return prisma.worksheet.findUnique({
-    where: { id },
+/** Returns the worksheet only when it belongs to `userId`. */
+export const getWorksheetDetails = async (id: string, userId: string) => {
+  return prisma.worksheet.findFirst({
+    where: { id, userId },
   });
 };
 
-export const deleteWorksheet = async (id: string) => {
-  return prisma.worksheet.delete({
-    where: { id },
+/** Deletes the worksheet only when it belongs to `userId`; returns whether a row was removed. */
+export const deleteWorksheet = async (id: string, userId: string): Promise<boolean> => {
+  const { count } = await prisma.worksheet.deleteMany({
+    where: { id, userId },
   });
+  return count > 0;
 };

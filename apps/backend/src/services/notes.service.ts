@@ -19,6 +19,7 @@ export interface NotesCreateInput {
   topic: string;
   type: 'SUMMARY' | 'REVISION' | 'FLASHCARDS';
   userId: string;
+  organizationId?: string | null;
 }
 
 export const createGeneratedNotes = async (input: NotesCreateInput) => {
@@ -65,6 +66,7 @@ Output JSON format exactly like:
       type: input.type,
       content: contentVal,
       userId: input.userId,
+      organizationId: input.organizationId ?? null,
     },
   });
 
@@ -78,14 +80,17 @@ export const listUserNotes = async (userId: string) => {
   });
 };
 
-export const getNoteDetails = async (id: string) => {
-  return prisma.generatedNotes.findUnique({
-    where: { id },
+/** Returns the notes only when they belong to `userId`. */
+export const getNoteDetails = async (id: string, userId: string) => {
+  return prisma.generatedNotes.findFirst({
+    where: { id, userId },
   });
 };
 
-export const deleteNote = async (id: string) => {
-  return prisma.generatedNotes.delete({
-    where: { id },
+/** Deletes the notes only when they belong to `userId`; returns whether a row was removed. */
+export const deleteNote = async (id: string, userId: string): Promise<boolean> => {
+  const { count } = await prisma.generatedNotes.deleteMany({
+    where: { id, userId },
   });
+  return count > 0;
 };

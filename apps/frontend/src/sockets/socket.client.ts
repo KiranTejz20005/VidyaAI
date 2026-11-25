@@ -1,8 +1,8 @@
 import { io, type Socket } from 'socket.io-client';
+import { getApiToken } from '@/lib/api';
 import { resolveSocketUrl } from '@/utils/url';
 
-const isSocketDebugEnabled =
-  process.env.NODE_ENV !== 'production' || process.env.NEXT_PUBLIC_API_DEBUG === 'true';
+const isSocketDebugEnabled = process.env.NODE_ENV === 'development';
 
 let socket: Socket | null = null;
 let reconnectCount = 0;
@@ -17,6 +17,8 @@ export function getSocket(): Socket {
     }
 
     socket = io(socketURL, {
+      // Evaluated on every (re)connect so the handshake always carries the current access token.
+      auth: (cb) => cb({ token: getApiToken() }),
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: 20,

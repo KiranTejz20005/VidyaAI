@@ -1,5 +1,4 @@
 import { apiClient } from './api.client';
-import { getApiToken } from '@/lib/api';
 
 export interface LibraryResource {
   id: string;
@@ -15,6 +14,59 @@ export interface LibraryResource {
   organizationId: string;
   createdAt: string;
   updatedAt: string;
+}
+
+const OBJECT_URL_TTL_MS = 60_000;
+const INLINE_VIEWABLE_TYPES = /^(application\/pdf|image\/(png|jpe?g|gif|webp)|text\/plain)$/i;
+
+function isAbsoluteHttpUrl(url: string | undefined): url is string {
+  return !!url && /^https?:\/\//i.test(url);
+}
+
+function filenameFromDisposition(header: unknown): string | null {
+  if (typeof header !== 'string') return null;
+  const encoded = header.match(/filename\*=UTF-8''([^;]+)/i);
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded[1].trim());
+    } catch {
+      return null;
+    }
+  }
+  const plain = header.match(/filename="?([^";]+)"?/i);
+  return plain ? plain[1].trim() : null;
+}
+
+function fallbackFilename(resource: LibraryResource): string {
+  const fromUrl = resource.fileUrl?.split(/[\\/]/).pop();
+  return fromUrl || resource.title || 'resource';
+}
+
+async function fetchResourceBlob(
+  resource: LibraryResource,
+  mode: 'download' | 'view',
+): Promise<{ blob: Blob; filename: string }> {
+  const response = await apiClient.get<Blob>(`/library/${encodeURIComponent(resource.id)}/${mode}`, {
+    responseType: 'blob',
+  });
+  const contentType = String(response.headers['content-type'] ?? '').split(';')[0].trim();
+  const blob = contentType && response.data.type !== contentType
+    ? new Blob([response.data], { type: contentType })
+    : response.data;
+  const filename = filenameFromDisposition(response.headers['content-disposition']) ?? fallbackFilename(resource);
+  return { blob, filename };
+}
+
+function saveBlob(blob: Blob, filename: string): void {
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = objectUrl;
+  anchor.download = filename;
+  anchor.rel = 'noopener';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), OBJECT_URL_TTL_MS);
 }
 
 export const LibraryService = {
@@ -56,24 +108,27 @@ export const LibraryService = {
   },
 
   downloadResource: async (resource: LibraryResource) => {
-    if (resource.fileUrl?.startsWith('http://') || resource.fileUrl?.startsWith('https://')) {
-      window.open(resource.fileUrl, '_blank');
+    if (isAbsoluteHttpUrl(resource.fileUrl)) {
+      window.open(resource.fileUrl, '_blank', 'noopener,noreferrer');
       return;
     }
-    const token = getApiToken();
-    const tokenQuery = token ? `?token=${token}` : '';
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
-    window.open(`${apiUrl}/library/${resource.id}/download${tokenQuery}`, '_blank');
+    const { blob, filename } = await fetchResourceBlob(resource, 'download');
+    saveBlob(blob, filename);
   },
 
   viewResource: async (resource: LibraryResource) => {
-    if (resource.fileUrl?.startsWith('http://') || resource.fileUrl?.startsWith('https://')) {
-      window.open(resource.fileUrl, '_blank');
+    if (isAbsoluteHttpUrl(resource.fileUrl)) {
+      window.open(resource.fileUrl, '_blank', 'noopener,noreferrer');
       return;
     }
-    const token = getApiToken();
-    const tokenQuery = token ? `?token=${token}` : '';
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
-    window.open(`${apiUrl}/library/${resource.id}/view${tokenQuery}`, '_blank');
+    const { blob, filename } = await fetchResourceBlob(resource, 'view');
+    // A blob: URL inherits this app's origin, so only render types that cannot execute script.
+    if (!INLINE_VIEWABLE_TYPES.test(blob.type)) {
+      saveBlob(blob, filename);
+      return;
+    }
+    const objectUrl = URL.createObjectURL(blob);
+    window.open(objectUrl, '_blank', 'noopener,noreferrer');
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), OBJECT_URL_TTL_MS);
   },
 };

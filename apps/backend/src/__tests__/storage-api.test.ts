@@ -29,6 +29,9 @@ vi.mock('../config/prisma', () => ({
     enrollment: {
       findFirst: vi.fn(),
     },
+    syllabus: { findFirst: vi.fn().mockResolvedValue({ id: "course-123" }) },
+    course: { findFirst: vi.fn().mockResolvedValue({ id: "course-123" }) },
+    user: { findFirst: vi.fn() },
   },
 }));
 

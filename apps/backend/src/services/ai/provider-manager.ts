@@ -4,6 +4,7 @@ import { env } from '../../config/env';
 import { logger } from '../../utils/logger';
 import { ProviderHealthManager } from './provider-health';
 import prisma from '../../config/prisma';
+import { PROVIDER_SDK_CLIENT_OPTIONS, providerSignal } from './request-signal';
 
 export interface AIResponse {
   text: string;
@@ -31,7 +32,7 @@ export class AnthropicProvider extends BaseAIProvider {
   constructor() {
     super();
     if (env.ANTHROPIC_API_KEY) {
-      this.client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+      this.client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, ...PROVIDER_SDK_CLIENT_OPTIONS });
     }
   }
 
@@ -39,7 +40,7 @@ export class AnthropicProvider extends BaseAIProvider {
     return (tokensPrompt * 3.0 + tokensCompletion * 15.0) / 1_000_000;
   }
 
-  async generate(systemPrompt: string, userPrompt: string, temperature: number, _signal?: AbortSignal): Promise<{ text: string; tokensPrompt: number; tokensCompletion: number }> {
+  async generate(systemPrompt: string, userPrompt: string, temperature: number, signal?: AbortSignal): Promise<{ text: string; tokensPrompt: number; tokensCompletion: number }> {
     if (!this.client) throw new Error('Anthropic API Key not configured');
 
     const response = await this.client.messages.create({
@@ -48,7 +49,7 @@ export class AnthropicProvider extends BaseAIProvider {
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }],
       temperature,
-    });
+    }, { signal: providerSignal(signal) });
 
     const text = response.content[0]?.type === 'text' ? response.content[0].text : '';
     const tokensPrompt = response.usage?.input_tokens ?? Math.ceil(userPrompt.length / 4);
@@ -72,6 +73,7 @@ export class NvidiaProvider extends BaseAIProvider {
       this.client = new OpenAI({
         apiKey: env.NVIDIA_API_KEY,
         baseURL: 'https://integrate.api.nvidia.com/v1',
+        ...PROVIDER_SDK_CLIENT_OPTIONS,
       });
     }
   }
@@ -80,7 +82,7 @@ export class NvidiaProvider extends BaseAIProvider {
     return ((tokensPrompt + tokensCompletion) * 0.07) / 1_000_000;
   }
 
-  async generate(systemPrompt: string, userPrompt: string, temperature: number, _signal?: AbortSignal): Promise<{ text: string; tokensPrompt: number; tokensCompletion: number }> {
+  async generate(systemPrompt: string, userPrompt: string, temperature: number, signal?: AbortSignal): Promise<{ text: string; tokensPrompt: number; tokensCompletion: number }> {
     if (!this.client) throw new Error('NVIDIA API Key not configured');
 
     const response = await this.client.chat.completions.create({
@@ -91,7 +93,7 @@ export class NvidiaProvider extends BaseAIProvider {
       ],
       temperature,
       max_tokens: 4096,
-    });
+    }, { signal: providerSignal(signal) });
 
     const text = response.choices[0]?.message?.content ?? '';
     const tokensPrompt = response.usage?.prompt_tokens ?? Math.ceil(userPrompt.length / 4);
@@ -115,6 +117,7 @@ export class GroqProvider extends BaseAIProvider {
       this.client = new OpenAI({
         apiKey: env.GROQ_API_KEY,
         baseURL: 'https://api.groq.com/openai/v1',
+        ...PROVIDER_SDK_CLIENT_OPTIONS,
       });
     }
   }
@@ -123,7 +126,7 @@ export class GroqProvider extends BaseAIProvider {
     return (tokensPrompt * 0.59 + tokensCompletion * 0.79) / 1_000_000;
   }
 
-  async generate(systemPrompt: string, userPrompt: string, temperature: number, _signal?: AbortSignal): Promise<{ text: string; tokensPrompt: number; tokensCompletion: number }> {
+  async generate(systemPrompt: string, userPrompt: string, temperature: number, signal?: AbortSignal): Promise<{ text: string; tokensPrompt: number; tokensCompletion: number }> {
     if (!this.client) throw new Error('Groq API Key not configured');
 
     const response = await this.client.chat.completions.create({
@@ -134,7 +137,7 @@ export class GroqProvider extends BaseAIProvider {
       ],
       temperature,
       max_tokens: 4096,
-    });
+    }, { signal: providerSignal(signal) });
 
     const text = response.choices[0]?.message?.content ?? '';
     const tokensPrompt = response.usage?.prompt_tokens ?? Math.ceil(userPrompt.length / 4);
@@ -155,7 +158,7 @@ export class OpenAIProvider extends BaseAIProvider {
   constructor() {
     super();
     if (env.OPENAI_API_KEY) {
-      this.client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+      this.client = new OpenAI({ apiKey: env.OPENAI_API_KEY, ...PROVIDER_SDK_CLIENT_OPTIONS });
     }
   }
 
@@ -163,7 +166,7 @@ export class OpenAIProvider extends BaseAIProvider {
     return (tokensPrompt * 0.15 + tokensCompletion * 0.60) / 1_000_000;
   }
 
-  async generate(systemPrompt: string, userPrompt: string, temperature: number, _signal?: AbortSignal): Promise<{ text: string; tokensPrompt: number; tokensCompletion: number }> {
+  async generate(systemPrompt: string, userPrompt: string, temperature: number, signal?: AbortSignal): Promise<{ text: string; tokensPrompt: number; tokensCompletion: number }> {
     if (!this.client) throw new Error('OpenAI API Key not configured');
 
     const response = await this.client.chat.completions.create({
@@ -174,7 +177,7 @@ export class OpenAIProvider extends BaseAIProvider {
       ],
       temperature,
       max_tokens: 4096,
-    });
+    }, { signal: providerSignal(signal) });
 
     const text = response.choices[0]?.message?.content ?? '';
     const tokensPrompt = response.usage?.prompt_tokens ?? Math.ceil(userPrompt.length / 4);
@@ -195,14 +198,15 @@ export class GeminiProvider extends BaseAIProvider {
     return (tokensPrompt * 0.075 + tokensCompletion * 0.3) / 1_000_000;
   }
 
-  async generate(systemPrompt: string, userPrompt: string, temperature: number, _signal?: AbortSignal): Promise<{ text: string; tokensPrompt: number; tokensCompletion: number }> {
+  async generate(systemPrompt: string, userPrompt: string, temperature: number, signal?: AbortSignal): Promise<{ text: string; tokensPrompt: number; tokensCompletion: number }> {
     const key = process.env.GEMINI_API_KEY || '';
     if (!key) throw new Error('Gemini API Key not configured');
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.modelName}:generateContent?key=${key}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.modelName}:generateContent`;
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+      signal: providerSignal(signal),
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: systemPrompt }] },
         contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
@@ -252,11 +256,12 @@ export class AIProviderManager {
       userId?: string;
       organizationId?: string;
       promptVersionId?: string;
+      signal?: AbortSignal;
     } = {}
   ): Promise<AIResponse> {
     const temp = options.temperature ?? 0.3;
-    const userId = options.userId || 'demo-faculty-id';
-    const organizationId = options.organizationId || 'demo-org-id';
+    const { userId, organizationId } = options;
+    const recordTelemetry = Boolean(options.promptVersionId && userId && organizationId);
 
     const candidates = this.providers.filter((p) => this.health.canAttempt(p.providerName as any));
     if (candidates.length === 0) {
@@ -268,16 +273,16 @@ export class AIProviderManager {
     for (const provider of candidates) {
       const t0 = Date.now();
       try {
-        const result = await provider.generate(systemPrompt, userPrompt, temp);
+        const result = await provider.generate(systemPrompt, userPrompt, temp, options.signal);
         const duration = Date.now() - t0;
         this.health.recordSuccess(provider.providerName as any, duration);
 
         const cost = provider.getCost(result.tokensPrompt, result.tokensCompletion);
 
-        if (options.promptVersionId) {
+        if (recordTelemetry) {
           prisma.promptExecution.create({
             data: {
-              promptVersionId: options.promptVersionId,
+              promptVersionId: options.promptVersionId!,
               providerName: provider.providerName,
               modelName: provider.modelName,
               tokensPrompt: result.tokensPrompt,
@@ -285,8 +290,8 @@ export class AIProviderManager {
               costUsd: cost,
               durationMs: duration,
               status: 'SUCCESS',
-              userId,
-              organizationId,
+              userId: userId as string,
+              organizationId: organizationId as string,
             },
           }).catch((err) => logger.warn(`[AI_TELEMETRY] Failed to write prompt logs: ${err}`));
         }
@@ -300,14 +305,15 @@ export class AIProviderManager {
         };
       } catch (err: any) {
         lastError = err;
+        if (options.signal?.aborted) throw err;
         const duration = Date.now() - t0;
         logger.error(`[AI_FALLBACK] Provider ${provider.providerName} failed: ${err.message}`);
         this.health.recordTransportFailure(provider.providerName as any);
 
-        if (options.promptVersionId) {
+        if (recordTelemetry) {
           prisma.promptExecution.create({
             data: {
-              promptVersionId: options.promptVersionId,
+              promptVersionId: options.promptVersionId!,
               providerName: provider.providerName,
               modelName: provider.modelName,
               tokensPrompt: 0,
@@ -316,8 +322,8 @@ export class AIProviderManager {
               durationMs: duration,
               status: 'FAILED',
               errorMessage: err.message,
-              userId,
-              organizationId,
+              userId: userId as string,
+              organizationId: organizationId as string,
             },
           }).catch((dbErr) => logger.warn(`[AI_TELEMETRY] Failed to write failure logs: ${dbErr}`));
         }

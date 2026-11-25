@@ -1,4 +1,7 @@
 import { test, expect } from '@playwright/test';
+import { E2E_ROLES, missingCredentialsMessage } from './credentials';
+
+const student = E2E_ROLES.student;
 
 /**
  * Critical journey: authentication.
@@ -8,10 +11,11 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Auth', () => {
   test('logs in successfully with valid credentials and lands on the dashboard', async ({ page }) => {
+    test.skip(!student.password, missingCredentialsMessage(student));
     await page.goto('/login');
 
-    await page.fill('input[placeholder="Email"]', 'student@vidyaai.com');
-    await page.fill('input[placeholder="Password"]', 'Student@123');
+    await page.fill('input[placeholder="Email"]', student.email);
+    await page.fill('input[placeholder="Password"]', student.password ?? '');
     await page.click('button:has-text("Sign in")');
 
     // Successful login redirects to the student dashboard.
@@ -22,8 +26,8 @@ test.describe('Auth', () => {
   test('shows an error and stays on /login with a wrong password', async ({ page }) => {
     await page.goto('/login');
 
-    await page.fill('input[placeholder="Email"]', 'student@vidyaai.com');
-    await page.fill('input[placeholder="Password"]', 'DefinitelyWrong@123');
+    await page.fill('input[placeholder="Email"]', student.email);
+    await page.fill('input[placeholder="Password"]', `wrong-${Date.now()}-password`);
     await page.click('button:has-text("Sign in")');
 
     // Must NOT reach the dashboard — still on the login page.

@@ -6,7 +6,6 @@ import type {
   TeacherPerformanceDto,
   UsageStatsDto,
   AiUsageStatsDto,
-  TrendDataDto,
 } from './dto';
 
 export function serializeDashboard(stats: any): DashboardStatsDto {
@@ -75,14 +74,5 @@ export function serializeAiUsage(data: any): AiUsageStatsDto {
     totalCost: data.totalCost ?? 0,
     providerUsage: data.providerUsage ?? {},
     topModels: data.topModels ?? [],
-  };
-}
-
-export function serializeTrendData(data: any): TrendDataDto {
-  return {
-    labels: data.labels ?? [],
-    values: data.values ?? [],
-    metric: data.metric ?? 'score',
-    period: data.period ?? '30d',
   };
 }

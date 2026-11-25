@@ -95,11 +95,16 @@ export const runAIEvaluation = async (req: Request, res: Response): Promise<void
 export const bulkAIEvaluation = async (req: Request, res: Response): Promise<void> => {
   try {
     const { assignmentId } = req.params;
+    const orgId = requireRequestOrgId(req);
     await assertCanGradeAssignment(req, assignmentId);
 
-    // Find all un-graded submissions
     const submissions = await prisma.studentSubmission.findMany({
-      where: { assignmentId, status: { not: 'GRADED' } },
+      where: {
+        assignmentId,
+        organizationId: orgId,
+        status: { notIn: ['GRADED', 'RESULT_PUBLISHED', 'ARCHIVED'] },
+      },
+      select: { id: true },
     });
 
     if (submissions.length === 0) {
@@ -107,24 +112,47 @@ export const bulkAIEvaluation = async (req: Request, res: Response): Promise<voi
       return;
     }
 
-    const results = [];
-    let successes = 0;
-    
-    // Evaluate sequentially to avoid API rate limits
-    for (const sub of submissions) {
-      try {
-        const evalResult = await evaluateSubmission(sub.id);
-        results.push({ submissionId: sub.id, success: true, score: evalResult.score });
-        successes++;
-      } catch (e: any) {
-        results.push({ submissionId: sub.id, success: false, error: e.message });
-      }
-    }
+    // Delegate to BullMQ (same path as /grading/bulk-evaluate) — do not grade synchronously in HTTP
+    const {
+      BULK_ASSESSMENT_STATUS_PREFIX,
+      getAssessmentQueue,
+      serializeBulkJobMeta,
+    } = await import('../queues/assessment.queue');
 
-    res.json({ 
-      success: true, 
-      message: `Successfully graded ${successes}/${submissions.length} submissions.`,
-      data: results 
+    const submissionIds = submissions.map((s) => s.id);
+    const bulkMeta = { total: submissionIds.length, completed: 0, failed: 0, errors: [] as string[] };
+
+    const job = await prisma.generationJob.create({
+      data: {
+        assignmentId,
+        organizationId: orgId,
+        status: `${BULK_ASSESSMENT_STATUS_PREFIX}queued`,
+        progress: 0,
+        progressVersion: 0,
+        stageIndex: 0,
+        error: serializeBulkJobMeta(bulkMeta),
+        startedAt: new Date(),
+      },
+    });
+
+    const bullmqJobId = `bulk-assessment-${job.id}`;
+    await getAssessmentQueue().add(
+      'bulk-assessment-coordinator',
+      {
+        kind: 'coordinator',
+        jobRecordId: job.id,
+        assignmentId,
+        organizationId: orgId,
+        submissionIds,
+      },
+      { jobId: bullmqJobId, attempts: 2 },
+    );
+    await prisma.generationJob.update({ where: { id: job.id }, data: { bullmqJobId } });
+
+    res.status(202).json({
+      success: true,
+      message: `Queued bulk grading for ${submissionIds.length} submissions.`,
+      data: { jobId: job.id, submissionCount: submissionIds.length },
     });
   } catch (err) {
     if (handleAccessError(res, err)) return;

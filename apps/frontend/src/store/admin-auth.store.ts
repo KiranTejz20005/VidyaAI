@@ -1,5 +1,13 @@
 import { create } from 'zustand';
-import { api } from '@/lib/api';
+import { api, setApiToken } from '@/lib/api';
+import {
+  beginImpersonation,
+  endImpersonation,
+  getOriginalAdminToken,
+  hasImpersonationFlag,
+  purgeLegacyImpersonationToken,
+} from '@/lib/impersonation';
+import { socketService } from '@/services/socket.service';
 import { useAuthStore } from './auth.store';
 
 export interface AvailableOrganization {
@@ -11,10 +19,11 @@ export interface AvailableOrganization {
 }
 
 interface AdminAuthStore {
-  originalAdminToken: string | null;
   isImpersonating: boolean;
   availableOrganizations: AvailableOrganization[];
   activeOrganizationId: string | null;
+  /** Token captured before impersonation; mirrors `getOriginalAdminToken()`. */
+  originalAdminToken: string | null;
   setOriginalAdminToken: (token: string | null) => void;
   initializeFromStorage: () => void | Promise<void>;
   exitImpersonation: () => Promise<void>;
@@ -23,58 +32,73 @@ interface AdminAuthStore {
   setActiveOrganization: (orgId: string | null) => void;
 }
 
+let authSubscribed = false;
+
 export const useAdminAuthStore = create<AdminAuthStore>((set, get) => ({
-  originalAdminToken: null,
   isImpersonating: false,
   availableOrganizations: [],
   activeOrganizationId: null,
+  originalAdminToken: null,
 
   setOriginalAdminToken: (token) => {
-    if (typeof window !== 'undefined') {
-      if (token) {
-        window.sessionStorage.setItem('original_admin_token', token);
-      } else {
-        window.sessionStorage.removeItem('original_admin_token');
-      }
+    if (token) {
+      beginImpersonation(token);
+    } else {
+      endImpersonation();
     }
-    set({ originalAdminToken: token, isImpersonating: !!token });
+    socketService.disconnect();
+    set({ isImpersonating: !!token, originalAdminToken: token });
   },
 
   initializeFromStorage: async () => {
     if (typeof window === 'undefined') return;
-    const originalAdminToken = window.sessionStorage.getItem('original_admin_token');
-    
-    const { useAuthStore } = await import('./auth.store');
-    
-    // Subscribe to auth store to keep activeOrganizationId in sync when user is loaded/updated
-    useAuthStore.subscribe((state) => {
-      const user = state.user;
-      const activeOrgId = (user as any)?.activeOrganizationId || user?.organizationId || null;
-      if (useAdminAuthStore.getState().activeOrganizationId !== activeOrgId) {
-        useAdminAuthStore.setState({ activeOrganizationId: activeOrgId });
-      }
-    });
+    purgeLegacyImpersonationToken();
+
+    if (!authSubscribed) {
+      authSubscribed = true;
+      // Keep activeOrganizationId in sync when the user is loaded/updated, and
+      // drop impersonation state once the session is cleared.
+      useAuthStore.subscribe((state) => {
+        const user = state.user;
+        const activeOrgId = user?.activeOrganizationId || user?.organizationId || null;
+        if (useAdminAuthStore.getState().activeOrganizationId !== activeOrgId) {
+          useAdminAuthStore.setState({ activeOrganizationId: activeOrgId });
+        }
+        if (!state.isAuthenticated && !state.isLoading && useAdminAuthStore.getState().isImpersonating) {
+          useAdminAuthStore.setState({ isImpersonating: false });
+        }
+      });
+    }
 
     const user = useAuthStore.getState().user;
-    const activeOrganizationId = (user as any)?.activeOrganizationId || user?.organizationId || null;
-    
     set({
-      originalAdminToken,
-      isImpersonating: !!originalAdminToken,
-      activeOrganizationId,
+      isImpersonating: hasImpersonationFlag(),
+      originalAdminToken: getOriginalAdminToken(),
+      activeOrganizationId: user?.activeOrganizationId || user?.organizationId || null,
     });
   },
 
   exitImpersonation: async () => {
-    const originalToken = get().originalAdminToken;
-    if (!originalToken) return;
+    if (!get().isImpersonating) return;
+    const originalToken = getOriginalAdminToken();
+    endImpersonation();
+    socketService.disconnect();
+    set({ isImpersonating: false });
 
-    if (typeof window !== 'undefined') {
-      window.sessionStorage.removeItem('original_admin_token');
+    if (originalToken) {
+      setApiToken(originalToken);
+      try {
+        const meRes = await api.get('/auth/me');
+        if (meRes.data?.data) {
+          useAuthStore.getState().setAuth(meRes.data.data, originalToken);
+          return;
+        }
+      } catch {
+        setApiToken(null);
+      }
     }
-    set({ originalAdminToken: null, isImpersonating: false });
-
-    useAuthStore.setState({ accessToken: originalToken });
+    // The in-memory token is gone (page reload) or no longer valid: recover the
+    // super-admin session from the httpOnly refresh cookie.
     await useAuthStore.getState().initialize();
   },
 
@@ -86,12 +110,11 @@ export const useAdminAuthStore = create<AdminAuthStore>((set, get) => ({
         set({ availableOrganizations: orgs });
         const stored = get().activeOrganizationId;
         if (!stored && orgs.length > 0) {
-          const firstId = orgs[0].id;
-          set({ activeOrganizationId: firstId });
+          set({ activeOrganizationId: orgs[0].id });
         }
       }
     } catch {
-      // ignore
+      // keep the previously loaded list on transient failures
     }
   },
 

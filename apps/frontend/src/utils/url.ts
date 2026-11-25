@@ -1,4 +1,4 @@
-import { DEFAULT_API_ORIGIN, PUBLIC_API_URL, PUBLIC_SOCKET_URL } from '@/config/public-env';
+import { LOCAL_API_ORIGIN, PUBLIC_API_URL, PUBLIC_SOCKET_URL } from '@/config/public-env';
 
 function isLocalDevHost(hostname: string): boolean {
   return hostname === 'localhost' || hostname === '127.0.0.1';
@@ -36,19 +36,23 @@ export function resolveApiOrigin(): string {
     }
   }
 
-  if (process.env.NODE_ENV === 'development') {
-    const localFallback = `http://localhost:3001/api/v1`;
-    console.info('[VidyaAI] No API origin configured — using local fallback:', localFallback);
-    return localFallback;
-  }
+  return `${LOCAL_API_ORIGIN}/api/v1`;
+}
 
-  return DEFAULT_API_ORIGIN;
+/** Server origin of the API (scheme + host + port, no /api or /api/vN suffix). */
+export function resolveApiServerOrigin(): string {
+  return stripApiPath(resolveApiOrigin());
+}
+
+function stripApiPath(url: string): string {
+  return url.replace(/\/+$/, '').replace(/\/api(?:\/v\d+)?$/, '');
 }
 
 export function resolveSocketUrl(): string {
+  // socket.io treats a URL path as a namespace, so connect to the bare server origin.
   const fromEnv =
     normalizeEnvUrl(PUBLIC_SOCKET_URL) ?? normalizeEnvUrl(PUBLIC_API_URL);
-  if (fromEnv) return fromEnv;
+  if (fromEnv) return stripApiPath(fromEnv);
 
   if (typeof window !== 'undefined') {
     const { hostname, origin } = window.location;
@@ -57,7 +61,7 @@ export function resolveSocketUrl(): string {
     }
   }
 
-  return DEFAULT_API_ORIGIN;
+  return LOCAL_API_ORIGIN;
 }
 
 export function resolveAssetUrl(path: string, apiOrigin?: string): string {
@@ -75,10 +79,10 @@ export function resolveAssetUrl(path: string, apiOrigin?: string): string {
     try {
       const url = new URL(trimmed);
       if (isLocalDevHost(url.hostname)) {
-        // If it points to an uploads path on localhost, use relative /uploads for same-origin proxy
+        // Uploads are served by the API server, never proxied onto the frontend origin.
         if (url.pathname.includes('/uploads/')) {
           const subpath = url.pathname.slice(url.pathname.indexOf('/uploads/'));
-          return subpath + url.search;
+          return joinUrl(uploadsOrigin(apiOrigin), subpath + url.search);
         }
         const origin = apiOrigin ?? resolveApiOrigin();
         return joinUrl(origin, url.pathname + url.search);
@@ -94,26 +98,25 @@ export function resolveAssetUrl(path: string, apiOrigin?: string): string {
   const uploadsIndex = normalizedSlashes.toLowerCase().indexOf('uploads/');
   if (uploadsIndex !== -1) {
     const afterUploads = normalizedSlashes.substring(uploadsIndex + 'uploads/'.length);
-    return `/uploads/${afterUploads}`;
+    return joinUrl(uploadsOrigin(apiOrigin), `/uploads/${afterUploads}`);
   }
 
   // Windows absolute path without "uploads" folder (e.g. C:\file.png)
   if (/^[a-zA-Z]:[/\\]/.test(trimmed)) {
     const filename = normalizedSlashes.split('/').pop() || trimmed;
-    return `/uploads/${filename}`;
+    return joinUrl(uploadsOrigin(apiOrigin), `/uploads/${filename}`);
   }
 
   // Plain filename without slashes (e.g. c68be5e5745a02cb65ecc91a.png)
   if (!normalizedSlashes.includes('/') && /\.(png|jpe?g|webp|gif|svg|pdf|docx?|txt)$/i.test(normalizedSlashes)) {
-    return `/uploads/${normalizedSlashes}`;
-  }
-
-  // Already a root-relative uploads path
-  if (normalizedSlashes.startsWith('/uploads/')) {
-    return normalizedSlashes;
+    return joinUrl(uploadsOrigin(apiOrigin), `/uploads/${normalizedSlashes}`);
   }
 
   const origin = apiOrigin ?? resolveApiOrigin();
   return joinUrl(origin, trimmed);
 }
 
+
+function uploadsOrigin(apiOrigin?: string): string {
+  return stripApiPath(apiOrigin ?? resolveApiOrigin());
+}

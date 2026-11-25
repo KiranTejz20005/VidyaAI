@@ -2,6 +2,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import { env } from '../../config/env';
 import type { StorageAdapter } from './storage-adapter';
+import { normalizeStorageKey } from './key-generator';
 
 export class LocalStorageAdapter implements StorageAdapter {
   private baseDir: string;
@@ -10,14 +11,28 @@ export class LocalStorageAdapter implements StorageAdapter {
     this.baseDir = path.resolve(env.UPLOAD_DIR, subDir);
   }
 
+  /**
+   * Maps an object key to a file under baseDir, keeping the full key so keys
+   * from different tenants/scopes never collide. Absolute paths, drive letters
+   * and traversal segments are rejected, and the resolved path must stay
+   * strictly inside baseDir.
+   */
   private fullPath(key: string): string {
-    const safe = path.basename(key);
-    return path.join(this.baseDir, safe);
+    if (typeof key !== 'string' || path.isAbsolute(key) || /^[a-zA-Z]:/.test(key)) {
+      throw new Error('Invalid storage key');
+    }
+    const cleanKey = normalizeStorageKey(key);
+    const base = path.resolve(this.baseDir);
+    const resolved = path.resolve(base, ...cleanKey.split('/'));
+    if (!resolved.startsWith(base + path.sep)) {
+      throw new Error('Invalid storage key');
+    }
+    return resolved;
   }
 
   async save(key: string, data: Buffer | Uint8Array, _contentType: string): Promise<string> {
-    await fs.mkdir(this.baseDir, { recursive: true });
     const fp = this.fullPath(key);
+    await fs.mkdir(path.dirname(fp), { recursive: true });
     await fs.writeFile(fp, data);
     return this.getPublicUrl(key);
   }
@@ -31,10 +46,16 @@ export class LocalStorageAdapter implements StorageAdapter {
   }
 
   async delete(key: string): Promise<void> {
+    let fp: string;
     try {
-      await fs.unlink(this.fullPath(key));
+      fp = this.fullPath(key);
     } catch {
-      // noop
+      return;
+    }
+    try {
+      await fs.unlink(fp);
+    } catch {
+      // Already removed.
     }
   }
 

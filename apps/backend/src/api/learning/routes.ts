@@ -19,7 +19,6 @@ import {
   generateStudyPlan,
   getInsights,
   identifyAtRisk,
-  getIdentifyAtRiskStatus,
 } from './controller';
 
 const router = Router();
@@ -40,6 +39,5 @@ router.post('/study-plans/:studentId/generate', validate(studentIdParamSchema), 
 router.get('/insights/:studentId', validate(studentIdParamSchema), asyncHandler(getInsights));
 
 router.post('/identify-at-risk', validate(identifyAtRiskSchema), requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandler(identifyAtRisk));
-router.get('/identify-at-risk/:jobId', validate(jobIdParamSchema), asyncHandler(getIdentifyAtRiskStatus));
 
 export default router;

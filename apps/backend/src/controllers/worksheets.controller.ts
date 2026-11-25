@@ -5,6 +5,7 @@ import {
   getWorksheetDetails,
   deleteWorksheet
 } from '../services/worksheets.service';
+import { getRequestOrgId, getRequestUserId } from '../security/request-context';
 
 export const generateWorksheet = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -13,7 +14,7 @@ export const generateWorksheet = async (req: Request, res: Response): Promise<vo
       res.status(400).json({ success: false, error: 'All fields are required' });
       return;
     }
-    const userId = req.user?.id || 'demo-faculty-id';
+    const userId = getRequestUserId(req);
 
     const sheet = await createWorksheet({
       title,
@@ -21,6 +22,7 @@ export const generateWorksheet = async (req: Request, res: Response): Promise<vo
       topic,
       difficulty,
       userId,
+      organizationId: getRequestOrgId(req) ?? null,
     });
 
     res.status(201).json({ success: true, data: sheet });
@@ -31,7 +33,7 @@ export const generateWorksheet = async (req: Request, res: Response): Promise<vo
 
 export const getSheets = async (req: Request, res: Response): Promise<void> => {
   try {
-    const userId = req.user?.id || 'demo-faculty-id';
+    const userId = getRequestUserId(req);
     const sheets = await listWorksheets(userId);
     res.json({ success: true, data: sheets });
   } catch (error) {
@@ -42,7 +44,7 @@ export const getSheets = async (req: Request, res: Response): Promise<void> => {
 export const getSheet = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const sheet = await getWorksheetDetails(id);
+    const sheet = await getWorksheetDetails(id, getRequestUserId(req));
     if (!sheet) {
       res.status(404).json({ success: false, error: 'Worksheet not found' });
       return;
@@ -56,7 +58,11 @@ export const getSheet = async (req: Request, res: Response): Promise<void> => {
 export const removeSheet = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    await deleteWorksheet(id);
+    const deleted = await deleteWorksheet(id, getRequestUserId(req));
+    if (!deleted) {
+      res.status(404).json({ success: false, error: 'Worksheet not found' });
+      return;
+    }
     res.json({ success: true, message: 'Worksheet deleted' });
   } catch (error) {
     res.status(500).json({ success: false, error: 'Failed to delete worksheet' });

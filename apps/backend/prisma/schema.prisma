@@ -150,8 +150,10 @@ model Organization {
   courses            Course[]
   programs           Program[]
   blueprints         Blueprint[]
-  approvalRecords    ApprovalRecord[]
-  storedFiles        StoredFile[]
+  approvalRecords         ApprovalRecord[]
+  storedFiles             StoredFile[]
+  documentProcessingJobs  DocumentProcessingJob[]
+  bulkAssessmentJobs      BulkAssessmentJob[]
 }
 
 model Department {
@@ -188,6 +190,7 @@ model User {
   hasCompletedOnboarding Boolean       @default(false)
   onboardingCompletedAt  DateTime?
   forcePasswordReset     Boolean       @default(false)
+  emailVerified          Boolean       @default(false)
   activeOrganizationId   String?
   organizationId         String?
   organization           Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -228,7 +231,9 @@ model User {
   leaveApplications   LeaveApplication[]     @relation("LeaveApplications")
   tutorSessions       TutorSession[]
   libraryResources    LibraryResource[]
-  storedFiles         StoredFile[]           @relation("UserFiles")
+  storedFiles              StoredFile[]           @relation("UserFiles")
+  evaluationRevisions      EvaluationRevision[]   @relation("EvaluationRevisions")
+  bulkAssessmentJobsCreated BulkAssessmentJob[]   @relation("BulkAssessmentJobCreator")
 
   @@index([organizationId])
   @@index([departmentId])
@@ -561,19 +566,24 @@ model Assignment {
   generationSeq          Int            @default(0)
   activeGenerationJobId  String?
   finalizedAt            DateTime?
+  assessmentMode         String         @default("DIGITAL")
+  courseId               String?
+  course                 Course?        @relation(fields: [courseId], references: [id], onDelete: SetNull)
   createdAt              DateTime       @default(now())
   updatedAt              DateTime       @updatedAt
 
-  generatedPapers GeneratedPaper[]
-  generationJobs  GenerationJob[]
-  submissions     StudentSubmission[]
-  knowledgeChunks KnowledgeChunk[]
+  generatedPapers    GeneratedPaper[]
+  generationJobs     GenerationJob[]
+  submissions        StudentSubmission[]
+  knowledgeChunks    KnowledgeChunk[]
+  bulkAssessmentJobs BulkAssessmentJob[]
 
   @@index([status, createdAt])
   @@index([subject])
   @@index([organizationId])
   @@index([createdById])
   @@index([classId])
+  @@index([courseId])
   @@index([organizationId, status, createdAt])
 }
 
@@ -691,6 +701,8 @@ model Session {
   expiresAt DateTime
   createdAt DateTime @default(now())
 
+  refreshTokens RefreshToken[]
+
   @@index([userId])
 }
 
@@ -699,11 +711,14 @@ model RefreshToken {
   tokenHash String   @unique
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessionId String?
+  session   Session? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   isRevoked Boolean  @default(false)
   expiresAt DateTime
   createdAt DateTime @default(now())
 
   @@index([userId])
+  @@index([sessionId])
 }
 
 model LoginHistory {
@@ -982,9 +997,11 @@ model StudentSubmission {
   fileType       String
   status         AttemptStatus          @default(SUBMITTED)
   submittedAt    DateTime               @default(now())
-  evaluations    SubmissionEvaluation[]
-  createdAt      DateTime               @default(now())
-  updatedAt      DateTime               @updatedAt
+  evaluations       SubmissionEvaluation[]
+  answerSheetPages  AnswerSheetPage[]
+  extractedAnswers  ExtractedAnswer[]
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
 
   @@unique([assignmentId, studentId])
   @@index([assignmentId])
@@ -1007,8 +1024,9 @@ model SubmissionEvaluation {
   teacherFeedback String?           @db.Text
   overriddenBy    String?
   overriddenAt    DateTime?
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  revisions       EvaluationRevision[]
 }
 
 // â”€â”€ Collections â”€â”€
@@ -1627,8 +1645,9 @@ model Course {
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
-  outcomes       CourseOutcome[]
-  blueprints     Blueprint[]
+  outcomes    CourseOutcome[]
+  blueprints  Blueprint[]
+  assignments Assignment[]
 
   @@unique([code, organizationId])
   @@index([departmentId])
@@ -1917,4 +1936,100 @@ model StoredFile {
   @@index([ownerId])
   @@index([organizationId])
   @@index([scope, entityId])
+}
+
+// ── Assessment Pipeline ──
+
+model DocumentProcessingJob {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sourceType     String
+  sourceId       String?
+  storageKey     String
+  status         String
+  stage          String
+  confidence     Float?
+  error          String?      @db.Text
+  idempotencyKey String?      @unique
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+  @@index([status])
+}
+
+model AnswerSheetPage {
+  id           String            @id @default(uuid())
+  submissionId String
+  submission   StudentSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  pageNo       Int
+  storageKey   String
+  width        Int?
+  height       Int?
+  orientation  String?
+  createdAt    DateTime          @default(now())
+
+  @@unique([submissionId, pageNo])
+  @@index([submissionId])
+}
+
+model ExtractedAnswer {
+  id            String            @id @default(uuid())
+  submissionId  String
+  submission    StudentSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  questionLabel String
+  text          String            @db.Text
+  struckText    String?           @db.Text
+  ocrConfidence Float?
+  reviewStatus  String            @default("PENDING")
+  pageNo        Int?
+  bbox          Json?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([submissionId])
+  @@index([submissionId, reviewStatus])
+}
+
+model EvaluationRevision {
+  id           String               @id @default(uuid())
+  evaluationId String
+  evaluation   SubmissionEvaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+  before       Json
+  after        Json
+  actorId      String
+  actor        User                 @relation("EvaluationRevisions", fields: [actorId], references: [id], onDelete: Cascade)
+  reason       String?              @db.Text
+  createdAt    DateTime             @default(now())
+
+  @@index([evaluationId])
+  @@index([actorId])
+}
+
+model BulkAssessmentJob {
+  id              String       @id @default(uuid())
+  assignmentId    String
+  assignment      Assignment   @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  status          String
+  total           Int
+  succeeded       Int
+  failed          Int
+  pending         Int
+  awaitingReview  Int
+  progress        Float
+  cancelRequested Boolean      @default(false)
+  error           String?      @db.Text
+  createdById     String
+  createdBy       User         @relation("BulkAssessmentJobCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([assignmentId])
+  @@index([organizationId])
+  @@index([status])
+  @@index([createdById])
 }

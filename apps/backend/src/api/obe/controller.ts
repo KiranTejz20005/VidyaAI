@@ -5,6 +5,7 @@ import { CurriculumGraphService } from '../../services/obe/curriculum-graph.serv
 import { BlueprintService } from '../../services/obe/blueprint.service';
 import { AttainmentService } from '../../services/obe/attainment.service';
 import { MappingReviewService } from '../../services/obe/mapping-review.service';
+import { BlueprintValidationService } from '../../services/obe/blueprint-validation.service';
 
 export const listCourses = async (req: Request, res: Response): Promise<void> => {
   const orgId = requireRequestOrgId(req);
@@ -510,6 +511,12 @@ export const generateBlueprintQuestionsController = async (req: Request, res: Re
     );
   }
 
+  const validation = BlueprintValidationService.validateExamPaperBlueprint({
+    totalMarks,
+    difficulty: 'MODERATE',
+    sections,
+  });
+
   const generated = {
     id: `bp-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
     title: title || 'Examination Blueprint',
@@ -517,15 +524,15 @@ export const generateBlueprintQuestionsController = async (req: Request, res: Re
     duration: isQuiz ? '45 Mins' : isMid ? '1.5 Hours' : '3 Hours',
     totalMarks,
     difficulty: 'MODERATE',
-    status: 'APPROVED',
+    status: validation.valid ? 'APPROVED' : 'DRAFT',
     createdAt: new Date().toISOString().split('T')[0],
     sections,
-    bloomDistribution: {
-      rememberUnderstand: 20,
-      applyAnalyze: isMid ? 45 : 50,
-      evaluateCreate: isMid ? 35 : 30
+    bloomDistribution: validation.actualBloomBands,
+    coMarksDistribution: validation.actualCoMarksDistribution,
+    validation: {
+      valid: validation.valid,
+      issues: validation.issues,
     },
-    coMarksDistribution: { CO1: 20, CO2: 20, CO3: 20, CO4: 20, CO5: 20 }
   };
 
   sendSuccess(res, { data: generated });

@@ -73,3 +73,22 @@ export interface BulkEvaluateJob {
   createdAt: string;
   completedAt?: string;
 }
+
+/** Aggregated buckets for the teacher bulk review dashboard */
+export interface BulkReviewStatusCounts {
+  total: number;
+  pendingProcessing: number;
+  processing: number;
+  evaluated: number;
+  failed: number;
+  awaitingReview: number;
+  finalized: number;
+}
+
+export type BulkReviewBucket =
+  | 'pending_processing'
+  | 'processing'
+  | 'evaluated'
+  | 'failed'
+  | 'awaiting_review'
+  | 'finalized';

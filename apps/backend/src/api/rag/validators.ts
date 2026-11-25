@@ -5,7 +5,6 @@ export const searchSchema = z.object({
   body: z.object({
     query: z.string().min(1).max(5000),
     limit: z.number().int().min(1).max(50).optional().default(10),
-    organizationId: z.string().uuid().optional(),
     filters: z.record(z.unknown()).optional(),
   }),
 });
@@ -14,7 +13,6 @@ export const retrieveSchema = z.object({
   body: z.object({
     query: z.string().min(1).max(5000),
     limit: z.number().int().min(1).max(50).optional().default(5),
-    organizationId: z.string().uuid().optional(),
   }),
 });
 
@@ -33,10 +31,7 @@ export const reindexDocumentSchema = z.object({
 export const ragQuerySchema = z.object({
   body: z.object({
     query: z.string().min(1).max(5000),
-    context: z.string().optional(),
-    organizationId: z.string().uuid().optional(),
     model: z.string().optional(),
-    systemPrompt: z.string().optional(),
   }),
 });
 

@@ -19,7 +19,6 @@ export const generateQuizSchema = z.object({
     difficulty: z.string(),
     bloomLevel: z.string().optional(),
     count: z.number().int().min(1).max(50).default(5),
-    organizationId: z.string().uuid().optional(),
   }),
 });
 
@@ -28,7 +27,6 @@ export const createQuizSessionSchema = z.object({
     topic: z.string().min(1),
     subject: z.string().min(1),
     difficulty: z.string(),
-    organizationId: z.string().uuid().optional(),
     totalQuestions: z.number().int().min(1).max(100).optional().default(10),
   }),
 });
@@ -38,10 +36,7 @@ export const updateQuizSessionSchema = z.object({
     id: z.string().uuid(),
   }),
   body: z.object({
-    score: z.number().min(0).optional(),
-    timeSpent: z.number().min(0).optional(),
-    attempts: z.number().int().min(0).optional(),
-    status: z.enum(['IN_PROGRESS', 'COMPLETED', 'ABANDONED']).optional(),
+    timeSpent: z.number().min(0).max(86_400).optional(),
   }),
 });
 
@@ -64,7 +59,6 @@ export const adaptiveStartSchema = z.object({
     topic: z.string().min(1),
     subject: z.string().min(1),
     initialDifficulty: z.string().optional().default('MEDIUM'),
-    organizationId: z.string().uuid().optional(),
   }),
 });
 
@@ -72,7 +66,7 @@ export const adaptiveNextSchema = z.object({
   body: z.object({
     sessionId: z.string().uuid(),
     lastQuestionId: z.string().uuid().optional(),
-    lastAnswer: z.string().optional(),
+    lastAnswer: z.string().max(5_000).optional(),
   }),
 });
 
