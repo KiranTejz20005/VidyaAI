@@ -9,6 +9,164 @@ import { invalidateCache } from '../api/common/cache';
 import { getPaper } from './paper.service';
 import { extractTextFromFileBuffer } from './document-extractor.service';
 import { mapAnswerRegions } from './answer-region-mapper.service';
+import { segmentByLabels, type SegmentationResult } from '../domain/answer-matching';
+import {
+  scoreAnswer,
+  routeForReview,
+  nextStatusAfterAi,
+  type CriterionAward,
+  type EvaluationStatus,
+  type ReviewRouting,
+  type RubricCriterion,
+} from '../domain/scoring';
+
+/** True when OCR text contains at least two recognisable question labels. */
+export function looksMultiQuestion(text: string): boolean {
+  return segmentByLabels(text).segments.length >= 2;
+}
+
+/** Segment multi-question OCR into labelled blocks for the evaluator prompt. */
+export function segmentAnswersForGrading(text: string): {
+  promptText: string;
+  segmentation: SegmentationResult | null;
+  matchConfidence: number;
+} {
+  if (!looksMultiQuestion(text)) {
+    return { promptText: text, segmentation: null, matchConfidence: 1 };
+  }
+  const segmentation = segmentByLabels(text);
+  const structured = segmentation.segments.map((s) => `Q${s.label}: ${s.text}`).join('\n\n');
+  const promptText =
+    structured +
+    (segmentation.unlabeled ? `\n\n[Unlabeled preamble]\n${segmentation.unlabeled}` : '');
+  const ambiguous = segmentation.segments.some((s) => s.ambiguous);
+  return { promptText, segmentation, matchConfidence: ambiguous ? 0.65 : 0.9 };
+}
+
+export function mapAiCriteriaToAwards(raw: unknown): CriterionAward[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => {
+      const o = item as Record<string, unknown>;
+      const criterionId = String(o.criterionId ?? o.id ?? '').trim();
+      if (!criterionId) return null;
+      const marksAwarded = Number(o.marksAwarded ?? o.score ?? o.marks ?? 0);
+      const rationale = String(o.rationale ?? o.explanation ?? '');
+      const confRaw = Number(o.confidence ?? 0.75);
+      const confidence = Number.isFinite(confRaw) ? Math.min(1, Math.max(0, confRaw)) : 0.75;
+      return { criterionId, marksAwarded, rationale, confidence };
+    })
+    .filter((a): a is CriterionAward => a !== null);
+}
+
+export function validateAiCriterionPayload(raw: unknown, criteria: RubricCriterion[]): boolean {
+  if (!Array.isArray(raw)) return false;
+  const awards = mapAiCriteriaToAwards(raw);
+  if (awards.length === 0) return false;
+  if (criteria.length === 0) return true;
+  const ids = new Set(criteria.map((c) => c.id));
+  return awards.some((a) => ids.has(a.criterionId));
+}
+
+export interface DomainScoringInput {
+  rubricCriteria: RubricCriterion[];
+  aiPayload: Record<string, unknown>;
+  fallbackScore: number;
+  fallbackTotalMarks: number;
+  fallbackCriteriaGrades: unknown[];
+  ocrConfidence: number;
+  matchConfidence: number;
+  rubricAmbiguous?: boolean;
+}
+
+export interface DomainScoringResult {
+  score: number;
+  totalMarks: number;
+  criteriaGrades: Array<Record<string, unknown>>;
+  evaluationStatus: EvaluationStatus;
+  reviewRouting: ReviewRouting;
+  scoreIssues: string[];
+}
+
+export function applyDomainScoring(input: DomainScoringInput): DomainScoringResult {
+  const {
+    rubricCriteria,
+    aiPayload,
+    fallbackScore,
+    fallbackTotalMarks,
+    fallbackCriteriaGrades,
+    ocrConfidence,
+    matchConfidence,
+    rubricAmbiguous,
+  } = input;
+
+  const awardSource = aiPayload.criterionAwards ?? aiPayload.criteriaGrades;
+  const awards = mapAiCriteriaToAwards(awardSource);
+  const aiOutputValid =
+    rubricCriteria.length > 0 ? validateAiCriterionPayload(awardSource, rubricCriteria) : true;
+
+  if (rubricCriteria.length === 0) {
+    const routing = routeForReview({
+      ocrConfidence,
+      matchConfidence,
+      gradingConfidence: 0.75,
+      aiOutputValid: true,
+      scoreIssues: [],
+      rubricAmbiguous,
+    });
+    return {
+      score: fallbackScore,
+      totalMarks: fallbackTotalMarks,
+      criteriaGrades: (fallbackCriteriaGrades as Array<Record<string, unknown>>) ?? [],
+      evaluationStatus: nextStatusAfterAi(routing),
+      reviewRouting: routing,
+      scoreIssues: [],
+    };
+  }
+
+  const scoreResult = scoreAnswer(rubricCriteria, awards);
+  const nameById = new Map(rubricCriteria.map((c) => [c.id, c.name]));
+  const rationaleById = new Map(awards.map((a) => [a.criterionId, a.rationale]));
+  const criteriaGrades = scoreResult.perCriterion.map((pc) => ({
+    criterionId: pc.criterionId,
+    criterionName: nameById.get(pc.criterionId) ?? '',
+    score: pc.awarded,
+    maxScore: pc.max,
+    maxMarks: pc.max,
+    explanation: rationaleById.get(pc.criterionId) ?? '',
+    missing: pc.missing,
+  }));
+
+  const gradingConfidence =
+    awards.length > 0
+      ? awards.reduce((sum, a) => sum + a.confidence, 0) / awards.length
+      : 0.5;
+
+  const routing = routeForReview({
+    ocrConfidence,
+    matchConfidence,
+    gradingConfidence,
+    aiOutputValid,
+    scoreIssues: scoreResult.issues,
+    rubricAmbiguous,
+  });
+
+  return {
+    score: scoreResult.total,
+    totalMarks: scoreResult.max,
+    criteriaGrades,
+    evaluationStatus: nextStatusAfterAi(routing),
+    reviewRouting: routing,
+    scoreIssues: scoreResult.issues,
+  };
+}
+
+function estimateOcrConfidence(extractedText: string): number {
+  const trimmed = extractedText.trim();
+  if (!trimmed) return 0.4;
+  if (trimmed.length < 20) return 0.6;
+  return 0.85;
+}
 
 export async function extractTextFromFile(filePath: string, fileType: string): Promise<string> {
   try {
@@ -59,6 +217,9 @@ export async function evaluateSubmission(submissionId: string): Promise<any> {
   }
 
   const studentAnswerText = await extractTextFromFile(submission.fileUrl, submission.fileType);
+  const { promptText: studentAnswerForPrompt, segmentation, matchConfidence } =
+    segmentAnswersForGrading(studentAnswerText);
+  const ocrConfidence = estimateOcrConfidence(studentAnswerText);
   const generatedPaper = await getPaper(submission.assignmentId).catch(() => null);
   const generatedPaperSections = generatedPaper && Array.isArray(generatedPaper.sections) ? generatedPaper.sections as any[] : [];
   const generatedPaperText = generatedPaperSections
@@ -104,14 +265,15 @@ export async function evaluateSubmission(submissionId: string): Promise<any> {
     rubricPrompt,
     '',
     'Student Submission:',
-    studentAnswerText,
+    studentAnswerForPrompt,
     '',
     'Task: Evaluate the submission. You MUST return a structured JSON object containing:',
-    '- score: total awarded marks.',
+    '- score: total awarded marks (informational; server will recompute from criterionAwards when a rubric exists).',
     '- totalMarks: maximum marks used for evaluation.',
     '- generalFeedback: short overall feedback.',
     '- questions: one item per question in the question paper. Each item must include questionNumber, score, maxMarks, studentAnswer, correctAnswer, and a detailed reason explaining why the answer is correct, partial, incorrect, or left blank.',
-    '- criteriaGrades: when a rubric is provided, one item per rubric criterion with criterionId, score, and a detailed explanation highlighting missing concepts and matched evidence.'
+    '- criterionAwards: when a rubric is provided, one item per rubric criterion with criterionId, marksAwarded, rationale (why marks were awarded or deducted), and confidence (0 to 1).',
+    '- criteriaGrades: optional legacy alias for criterionAwards with criterionId, score, explanation, and confidence.'
   ].join('\n');
 
   logger.info({ submissionId }, 'AI Assignment Evaluation started');
@@ -134,9 +296,34 @@ export async function evaluateSubmission(submissionId: string): Promise<any> {
       : Array.isArray(data.questionGrades) && data.questionGrades.length > 0
       ? data.questionGrades
       : [];
-    const computedCriteria = Array.isArray(data.criteriaGrades) && data.criteriaGrades.length > 0
+    const rawCriteriaGrades = Array.isArray(data.criterionAwards) && data.criterionAwards.length > 0
+      ? data.criterionAwards
+      : Array.isArray(data.criteriaGrades) && data.criteriaGrades.length > 0
       ? data.criteriaGrades
-      : computedQuestionGrades;
+      : [];
+
+    const rubricCriteria: RubricCriterion[] = config.rubric
+      ? config.rubric.criteria.map((c: { id: string; name: string; maxMarks: number }) => ({
+          id: c.id,
+          name: c.name,
+          maxMarks: c.maxMarks,
+        }))
+      : [];
+
+    const domainScoring = applyDomainScoring({
+      rubricCriteria,
+      aiPayload: data as Record<string, unknown>,
+      fallbackScore: computedScore,
+      fallbackTotalMarks: correctTotalMarks,
+      fallbackCriteriaGrades: rawCriteriaGrades.length > 0 ? rawCriteriaGrades : computedQuestionGrades,
+      ocrConfidence,
+      matchConfidence,
+      rubricAmbiguous: segmentation?.segments.some((s) => s.ambiguous),
+    });
+
+    const finalScore = domainScoring.score;
+    const finalTotalMarks = domainScoring.totalMarks;
+    const computedCriteria = domainScoring.criteriaGrades;
 
     const expectedQuestions = generatedPaperSections
       .flatMap((section: any) => Array.isArray(section.questions) ? section.questions : [])
@@ -199,37 +386,48 @@ export async function evaluateSubmission(submissionId: string): Promise<any> {
     const answerRegions = mappingResult.regions;
     const submissionPages = mappingResult.pages;
 
+    const answerRegionsPayload = {
+      regions: answerRegions,
+      pages: submissionPages,
+      questions: computedQuestionGrades,
+      evaluationStatus: domainScoring.evaluationStatus,
+      reviewRouting: domainScoring.reviewRouting,
+      scoreIssues: domainScoring.scoreIssues,
+      answerSegments: segmentation
+        ? segmentation.segments.map((s) => ({
+            label: s.label,
+            ambiguous: s.ambiguous,
+            parts: s.parts,
+          }))
+        : undefined,
+    };
+
     // Save evaluation to database with regions, pages, and question evaluations
     const evaluation = await prisma.submissionEvaluation.upsert({
       where: { submissionId },
       create: {
         submissionId,
-        score: computedScore,
-        totalMarks: correctTotalMarks,
+        score: finalScore,
+        totalMarks: finalTotalMarks,
         generalFeedback: data.generalFeedback || data.feedback || '',
-        criteriaGrades: computedCriteria,
-        answerRegions: {
-          regions: answerRegions,
-          pages: submissionPages,
-          questions: computedQuestionGrades,
-        } as any,
+        criteriaGrades: computedCriteria as unknown as Prisma.InputJsonValue,
+        answerRegions: answerRegionsPayload as unknown as Prisma.InputJsonValue,
       },
       update: {
-        score: computedScore,
-        totalMarks: correctTotalMarks,
+        score: finalScore,
+        totalMarks: finalTotalMarks,
         generalFeedback: data.generalFeedback || data.feedback || '',
-        criteriaGrades: computedCriteria,
-        answerRegions: {
-          regions: answerRegions,
-          pages: submissionPages,
-          questions: computedQuestionGrades,
-        } as any,
+        criteriaGrades: computedCriteria as unknown as Prisma.InputJsonValue,
+        answerRegions: answerRegionsPayload as unknown as Prisma.InputJsonValue,
       },
     });
 
+    const submissionStatus =
+      domainScoring.evaluationStatus === 'NEEDS_REVIEW' ? 'UNDER_REVIEW' : 'GRADED';
+
     await prisma.studentSubmission.update({
       where: { id: submissionId },
-      data: { status: 'GRADED' },
+      data: { status: submissionStatus },
     });
 
     // Invalidate cached student-performance analytics so fresh scores are reflected
@@ -241,6 +439,8 @@ export async function evaluateSubmission(submissionId: string): Promise<any> {
       questions: computedQuestionGrades,
       answerRegions,
       pages: submissionPages,
+      evaluationStatus: domainScoring.evaluationStatus,
+      reviewRouting: domainScoring.reviewRouting,
     };
   } catch (error) {
     logger.error(error, `AI Assignment Evaluation failed for submissionId: ${submissionId}`);
