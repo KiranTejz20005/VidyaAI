@@ -21,10 +21,14 @@ import {
   generatePaperSchema,
   listPapersQuerySchema,
 } from './validators';
+import analysisRouter from './analysis-routes';
 
 const router = Router();
 
 router.use(authenticate);
+
+// Mounted before /:id so "analyze" is not captured as a paper id.
+router.use('/analyze', analysisRouter);
 
 router.post('/generate', requireRole('ADMIN', 'TEACHER'), paperGenerationRateLimiter, validate(generatePaperSchema), asyncHandler(generatePaper));
 router.get('/generate/:jobId', requireRole('ADMIN', 'TEACHER'), validate(jobIdParamSchema), asyncHandler(checkGenerationJob));

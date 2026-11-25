@@ -2,12 +2,43 @@ import { Request, Response } from 'express';
 import { sendSuccess, sendAccepted, sendNoContent } from '../common/response';
 import { ApiError } from '../common/errors';
 import { parsePagination, buildPagination } from '../common/pagination';
-import { getRequestUserId, requireRequestOrgId, getRequestOrgId } from '../../security/request-context';
+import { getRequestUserId, requireRequestOrgId, orgScope, isStudentRole } from '../../security/request-context';
 import { createAssignment, enqueueGeneration } from '../../services/assignment.service';
 import { buildCanonicalGenerationState } from '../../services/canonical-metadata.service';
 import { getGenerationQueue } from '../../queues/generation.queue';
 import prisma from '../../config/prisma';
 import { serializeGeneratedPaper, serializeGenerationJob, serializeAnswerKey } from './serializers';
+
+/** Assignment states in which a paper is released to students. */
+const STUDENT_VISIBLE_ASSIGNMENT_STATUSES = new Set(['PUBLISHED', 'ACTIVE', 'COMPLETED']);
+
+/**
+ * Loads a paper inside the caller's tenant. Students additionally only see
+ * papers whose assignment has been released to them; anything else is a 404
+ * so the response does not reveal that a draft exists.
+ */
+async function loadPaperForRequest(req: Request, id: string) {
+  const paper = await prisma.generatedPaper.findFirst({
+    where: { id, ...orgScope(req) },
+    include: { assignment: { select: { status: true } } },
+  });
+  if (!paper) throw ApiError.notFound('Paper not found');
+  if (isStudentRole(req.user?.role) && !STUDENT_VISIBLE_ASSIGNMENT_STATUSES.has(paper.assignment.status)) {
+    throw ApiError.notFound('Paper not found');
+  }
+  return paper;
+}
+
+/** Removes answers from a serialized paper so it can be shown to students. */
+function stripAnswers<T extends { sections: Array<{ questions: Array<{ answer?: unknown }> }> }>(dto: T): T {
+  return {
+    ...dto,
+    sections: dto.sections.map((section) => ({
+      ...section,
+      questions: section.questions.map(({ answer: _answer, ...question }) => question),
+    })),
+  };
+}
 
 export const generatePaper = async (req: Request, res: Response): Promise<void> => {
   const userId = getRequestUserId(req);
@@ -50,6 +81,14 @@ export const checkGenerationJob = async (req: Request, res: Response): Promise<v
   const bullJob = await queue.getJob(jobId);
 
   if (!bullJob) {
+    throw ApiError.notFound('Generation job not found');
+  }
+
+  const jobAssignmentId = bullJob.data?.assignmentId;
+  const ownedAssignment = jobAssignmentId
+    ? await prisma.assignment.findFirst({ where: { id: jobAssignmentId, ...orgScope(req) }, select: { id: true } })
+    : null;
+  if (!ownedAssignment) {
     throw ApiError.notFound('Generation job not found');
   }
 
@@ -101,17 +140,10 @@ export const listPapers = async (req: Request, res: Response): Promise<void> => 
 
 export const getPaperById = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
-  const orgId = getRequestOrgId(req);
+  const paper = await loadPaperForRequest(req, id);
 
-  const paper = await prisma.generatedPaper.findFirst({
-    where: { id, ...(orgId ? { organizationId: orgId } : {}) },
-  });
-
-  if (!paper) {
-    throw ApiError.notFound('Paper not found');
-  }
-
-  sendSuccess(res, { data: serializeGeneratedPaper(paper) });
+  const dto = serializeGeneratedPaper(paper);
+  sendSuccess(res, { data: isStudentRole(req.user?.role) ? stripAnswers(dto) : dto });
 };
 
 export const deletePaper = async (req: Request, res: Response): Promise<void> => {
@@ -164,9 +196,7 @@ export const archivePaper = async (req: Request, res: Response): Promise<void> =
 
 export const getPaperDownloadUrl = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
-
-  const paper = await prisma.generatedPaper.findUnique({ where: { id } });
-  if (!paper) throw ApiError.notFound('Paper not found');
+  const paper = await loadPaperForRequest(req, id);
 
   if (!paper.pdfUrl && !paper.pdfPath) {
     throw ApiError.notFound('PDF not available for this paper');
@@ -188,9 +218,9 @@ export const getPaperDownloadUrl = async (req: Request, res: Response): Promise<
 
 export const getAnswerKey = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
+  if (isStudentRole(req.user?.role)) throw ApiError.forbidden('Answer keys are only available to staff');
 
-  const paper = await prisma.generatedPaper.findUnique({ where: { id } });
-  if (!paper) throw ApiError.notFound('Paper not found');
+  const paper = await loadPaperForRequest(req, id);
 
   sendSuccess(res, { data: serializeAnswerKey(paper) });
 };
