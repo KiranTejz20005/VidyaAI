@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { E2E_ROLES, missingCredentialsMessage } from './credentials';
 
 /**
  * Critical journey: a student takes a practice quiz and sees a score.
@@ -17,6 +18,8 @@ import { test, expect } from '@playwright/test';
 test.use({ storageState: 'e2e/.auth/student.json' });
 
 test.describe('Quiz / practice', () => {
+  test.skip(!E2E_ROLES.student.password, missingCredentialsMessage(E2E_ROLES.student));
+
   test('student can start a practice quiz and see a score', async ({ page }) => {
     await page.goto('/student/practice');
 

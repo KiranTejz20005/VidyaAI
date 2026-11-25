@@ -1,39 +1,23 @@
 import { chromium, type FullConfig } from '@playwright/test';
 import path from 'path';
 import fs from 'fs';
+import { E2E_ROLES, missingCredentialsMessage, type E2ERole } from './credentials';
 
 /**
  * Global setup: authenticate each seeded role through the real UI and persist a
  * storageState (cookies + localStorage) so individual specs can reuse sessions
  * without re-logging-in. The seeded users come from
- * `apps/backend/prisma/seed-test-users.ts`.
- *
- * Credentials (from prisma/seed-test-users.ts):
- *   student@vidyaai.com   / Student@123   (STUDENT  -> /dashboard/student)
- *   faculty@vidyaai.com   / Faculty@123   (TEACHER  -> /dashboard/faculty)
- *   admin@vidyaai.com     / OrgAdmin@123  (ADMIN    -> /dashboard/admin)
- *   superadmin@vidyaai.com/ SuperAdmin@123 (SUPER_ADMIN -> /super-admin)
+ * `apps/backend/prisma/seed-test-users.ts`; their passwords must be supplied via
+ * the E2E_*_PASSWORD environment variables (see ./credentials.ts). Roles without
+ * a configured password are skipped and their suites skip themselves.
  */
 
 const BASE_URL = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3000';
 const AUTH_DIR = path.resolve(__dirname, '.auth');
 
-type Role = {
-  name: string;
-  email: string;
-  password: string;
-  dashboardPath: string;
-};
-
-const ROLES: Role[] = [
-  { name: 'student', email: 'student@vidyaai.com', password: process.env.E2E_STUDENT_PASSWORD || 'Student@123', dashboardPath: '/dashboard/student' },
-  { name: 'teacher', email: 'faculty@vidyaai.com', password: process.env.E2E_TEACHER_PASSWORD || 'Faculty@123', dashboardPath: '/dashboard/faculty' },
-  { name: 'admin', email: 'admin@vidyaai.com', password: process.env.E2E_ADMIN_PASSWORD || 'OrgAdmin@123', dashboardPath: '/dashboard/admin' },
-];
-
-async function loginAndSaveState(role: Role) {
+async function loginAndSaveState(role: E2ERole & { password: string }) {
   const browser = await chromium.launch();
-  const context = await browser.newContext();
+  const context = await browser.newContext({ baseURL: BASE_URL });
   const page = await context.newPage();
 
   await page.goto('/login');
@@ -54,8 +38,12 @@ async function loginAndSaveState(role: Role) {
 }
 
 async function globalSetup(_config: FullConfig) {
-  for (const role of ROLES) {
-    await loginAndSaveState(role);
+  for (const role of Object.values(E2E_ROLES)) {
+    if (!role.password) {
+      console.warn(`[globalSetup] ${missingCredentialsMessage(role)}`);
+      continue;
+    }
+    await loginAndSaveState({ ...role, password: role.password });
   }
 }
 

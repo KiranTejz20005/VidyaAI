@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import { api } from '@/lib/api';
+import { userScopedKey } from '@/lib/user-storage';
+import { useAuthStore } from '@/store/auth.store';
 
 export type NotificationType = 'pull_request' | 'alert' | 'team' | 'deploy' | 'doc' | 'assignment' | 'assessment';
 export type NotificationPriority = 'urgent' | 'normal' | 'low';
@@ -36,7 +38,11 @@ export interface RawApiNotification {
   createdAt: string;
 }
 
-const STORAGE_KEY = 'vidyaai_notifications_cache_v3';
+const STORAGE_KEY = 'vidya_notifications_cache_v3';
+
+function storageKey(): string {
+  return userScopedKey(STORAGE_KEY, useAuthStore.getState().user?.id);
+}
 
 export const defaultSeedNotifications: NotificationItem[] = [
   {
@@ -121,7 +127,7 @@ export const defaultSeedNotifications: NotificationItem[] = [
 function loadFromStorage(): NotificationItem[] {
   if (typeof window === 'undefined') return defaultSeedNotifications;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey());
     if (!raw) return defaultSeedNotifications;
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.length > 0) {
@@ -136,7 +142,7 @@ function loadFromStorage(): NotificationItem[] {
 function saveToStorage(items: NotificationItem[]) {
   if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+    localStorage.setItem(storageKey(), JSON.stringify(items));
   } catch {
     // Ignore quota errors
   }

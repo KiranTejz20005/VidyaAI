@@ -1,6 +1,8 @@
 import { create } from 'zustand';
-import { api, setApiToken } from '@/lib/api';
-import { createClient } from '@/lib/supabase/client';
+import { api, refreshAccessToken, setApiToken } from '@/lib/api';
+import { endImpersonation } from '@/lib/impersonation';
+import { clearUserLocalData } from '@/lib/user-storage';
+import { socketService } from '@/services/socket.service';
 
 export interface User {
   id: string;
@@ -50,34 +52,43 @@ interface AuthStore {
   accessToken: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
+  /** True while the backend requires a password change before any other API call. */
+  passwordResetRequired: boolean;
   hasPermission: (roles: string[]) => boolean;
   setAuth: (user: User, token: string) => void;
   clearAuth: () => void;
+  markPasswordResetRequired: () => void;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
   initialize: () => Promise<boolean>;
   login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
-  signInWithOtp: (email: string) => Promise<{ success: boolean; error?: string }>;
-  verifyOtp: (email: string, token: string, role?: 'STUDENT' | 'TEACHER' | 'ADMIN' | 'SUPER_ADMIN') => Promise<{ success: boolean; error?: string }>;
+  googleLogin: (data: {
+    token: string;
+    role: 'STUDENT' | 'TEACHER' | 'ADMIN';
+    isSignUp: boolean;
+  }) => Promise<{ success: boolean; error?: string }>;
+  /** Google/SSO popup completion — maps onto `/auth/google` when a token is present. */
   ssoLogin: (data: {
     email: string;
     firstName?: string;
     lastName?: string;
-    provider: string;
+    provider?: string;
     token?: string;
-    role?: 'STUDENT' | 'TEACHER' | 'ADMIN' | 'SUPER_ADMIN';
+    role?: 'STUDENT' | 'TEACHER' | 'ADMIN';
     isSignUp?: boolean;
   }) => Promise<{ success: boolean; error?: string }>;
-  googleLogin: (data: {
-    token: string;
-    role: 'STUDENT' | 'TEACHER' | 'ADMIN' | 'SUPER_ADMIN';
-    isSignUp?: boolean;
-  }) => Promise<{ success: boolean; error?: string }>;
+  /** Request a one-time code (backend may not expose OTP yet). */
+  signInWithOtp: (email: string) => Promise<{ success: boolean; error?: string }>;
+  verifyOtp: (
+    email: string,
+    code: string,
+    role?: 'STUDENT' | 'TEACHER' | 'ADMIN',
+  ) => Promise<{ success: boolean; error?: string }>;
   signup: (data: {
     email: string;
     password?: string;
     firstName: string;
     lastName: string;
     role: 'STUDENT' | 'TEACHER';
-    organizationId: string;
   }) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
   updateProfile: (data: { firstName?: string; lastName?: string; email?: string; avatar?: string }) => Promise<{ success: boolean; error?: string }>;
@@ -93,11 +104,23 @@ interface AuthStore {
   }) => Promise<{ success: boolean; error?: string }>;
 }
 
+function applySession(set: (partial: Partial<AuthStore>) => void, user: User, token: string) {
+  setApiToken(token);
+  set({
+    user,
+    accessToken: token,
+    isAuthenticated: true,
+    isLoading: false,
+    passwordResetRequired: user.forcePasswordReset === true,
+  });
+}
+
 export const useAuthStore = create<AuthStore>((set, get) => ({
   user: null,
   accessToken: null,
   isAuthenticated: false,
   isLoading: true,
+  passwordResetRequired: false,
 
   hasPermission: (roles: string[]) => {
     const user = get().user;
@@ -105,181 +128,66 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   },
 
   setAuth: (user, token) => {
-    setApiToken(token);
-    set({ user, accessToken: token, isAuthenticated: true, isLoading: false });
+    applySession(set, user, token);
   },
 
   clearAuth: () => {
     setApiToken(null);
-    set({ user: null, accessToken: null, isAuthenticated: false, isLoading: false });
+    socketService.disconnect();
+    endImpersonation();
+    clearUserLocalData();
+    set({
+      user: null,
+      accessToken: null,
+      isAuthenticated: false,
+      isLoading: false,
+      passwordResetRequired: false,
+    });
+  },
+
+  markPasswordResetRequired: () => {
+    set({ passwordResetRequired: true });
+  },
+
+  changePassword: async (currentPassword, newPassword) => {
+    try {
+      const res = await api.put('/auth/me/password', { currentPassword, newPassword });
+      const token: unknown = res.data?.data?.accessToken;
+      if (typeof token === 'string' && token) {
+        setApiToken(token);
+        set({ accessToken: token });
+      }
+      set((state) => ({
+        passwordResetRequired: false,
+        user: state.user ? { ...state.user, forcePasswordReset: false } : null,
+      }));
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to update password.' };
+    }
   },
 
   initialize: async () => {
-    try {
-      if (!get().isAuthenticated) {
-        set({ isLoading: true });
-      }
-
-      // Check active Supabase session
-      try {
-        const supabase = createClient();
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session?.user) {
-          const u = session.user;
-          setApiToken(session.access_token);
-
-          // Fetch full backend profile to retrieve persistent avatar & preferences from DB
-          try {
-            const meRes = await api.get('/auth/me');
-            if (meRes.data?.data) {
-              set({
-                user: meRes.data.data,
-                accessToken: session.access_token,
-                isAuthenticated: true,
-                isLoading: false,
-              });
-              return true;
-            }
-          } catch {
-            // If backend /auth/me fails, fallback to session metadata
-          }
-
-          const userObj: User = {
-            id: u.id,
-            email: u.email || '',
-            firstName: u.user_metadata?.first_name || u.user_metadata?.full_name?.split(' ')[0] || 'User',
-            lastName: u.user_metadata?.last_name || u.user_metadata?.full_name?.split(' ')[1] || 'Account',
-            role: (u.user_metadata?.role as string) || 'STUDENT',
-            avatar: u.user_metadata?.avatar_url || u.user_metadata?.picture || null,
-            avatarUrl: u.user_metadata?.avatar_url || u.user_metadata?.picture || null,
-            organizationId: null,
-            organizationName: null,
-            departmentId: null,
-            departmentName: null,
-            preferences: {},
-            hasCompletedOnboarding: false,
-          };
-          set({
-            user: userObj,
-            accessToken: session.access_token,
-            isAuthenticated: true,
-            isLoading: false,
-          });
-          return true;
-        }
-      } catch (sbErr) {
-        // Continue to backend refresh check
-      }
-
-      const refreshRes = await api.post('/auth/refresh');
-      const token = refreshRes.data?.data?.accessToken;
-
-      if (token) {
-        setApiToken(token);
-        set({ accessToken: token });
-        const meRes = await api.get('/auth/me');
-        const user = meRes.data?.data;
-
-        if (user) {
-          set({
-            user,
-            accessToken: token,
-            isAuthenticated: true,
-            isLoading: false,
-          });
-          return true;
-        }
-      }
-      if (!get().isAuthenticated) get().clearAuth();
-      else set({ isLoading: false });
-      return false;
-    } catch (err) {
-      if (!get().isAuthenticated) get().clearAuth();
-      else set({ isLoading: false });
-      return false;
-    }
-  },
-
-  signInWithOtp: async (email: string) => {
-    try {
+    if (!get().isAuthenticated) {
       set({ isLoading: true });
-      const supabase = createClient();
-      const { error } = await supabase.auth.signInWithOtp({
-        email,
-        options: {
-          shouldCreateUser: true,
-        },
-      });
-
-      set({ isLoading: false });
-      if (error) {
-        if (error.status === 500 || error.message?.includes('500') || error.message?.includes('magic link')) {
-          return {
-            success: false,
-            error: 'Custom SMTP Error: Your SMTP credentials in the Supabase Dashboard are invalid or failing. Please verify your SMTP Host, Port, Username, and App Password.',
-          };
-        }
-        return { success: false, error: error.message };
-      }
-      return { success: true };
-    } catch (err: any) {
-      set({ isLoading: false });
-      return { success: false, error: err.message || 'Failed to send OTP code.' };
     }
-  },
-
-  verifyOtp: async (email: string, token: string, role?: 'STUDENT' | 'TEACHER' | 'ADMIN' | 'SUPER_ADMIN') => {
     try {
-      set({ isLoading: true });
-      const supabase = createClient();
-      const { data, error } = await supabase.auth.verifyOtp({
-        email,
-        token,
-        type: 'email',
-      });
-
-      if (error) {
-        set({ isLoading: false });
-        return { success: false, error: error.message };
+      const token = await refreshAccessToken();
+      const meRes = await api.get('/auth/me');
+      const user: User | undefined = meRes.data?.data;
+      if (user) {
+        applySession(set, user, getCurrentToken(token));
+        return true;
       }
-
-      if (data?.session && data?.user) {
-        try {
-          await get().ssoLogin({
-            email: data.user.email || email,
-            firstName: data.user.user_metadata?.first_name || 'User',
-            lastName: data.user.user_metadata?.last_name || 'Account',
-            provider: 'supabase_otp',
-            token: data.session.access_token,
-            role: role || 'STUDENT',
-            isSignUp: true,
-          });
-        } catch {
-          const userObj: User = {
-            id: data.user.id,
-            email: data.user.email || email,
-            firstName: data.user.user_metadata?.first_name || 'User',
-            lastName: data.user.user_metadata?.last_name || 'Account',
-            role: role || 'STUDENT',
-            organizationId: null,
-            organizationName: null,
-            departmentId: null,
-            departmentName: null,
-            preferences: {},
-            hasCompletedOnboarding: false,
-          };
-          get().setAuth(userObj, data.session.access_token);
-        }
-        set({ isLoading: false });
-        return { success: true };
-      }
-
-      set({ isLoading: false });
-      return { success: false, error: 'Verification failed.' };
-    } catch (err: any) {
-      set({ isLoading: false });
-      return { success: false, error: err.message || 'OTP Verification failed.' };
+    } catch {
+      // No valid session: fall through to the unauthenticated state.
     }
+    if (get().isAuthenticated) {
+      set({ isLoading: false });
+    } else {
+      get().clearAuth();
+    }
+    return false;
   },
 
   login: async (email, password) => {
@@ -288,13 +196,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       const res = await api.post('/auth/login', { email, password });
       const { accessToken, user } = res.data?.data || {};
       if (accessToken && user) {
-        setApiToken(accessToken);
-        set({
-          user,
-          accessToken,
-          isAuthenticated: true,
-          isLoading: false,
-        });
+        applySession(set, user, accessToken);
         return { success: true };
       }
       set({ isLoading: false });
@@ -305,49 +207,81 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     }
   },
 
-  ssoLogin: async (data) => {
-    try {
-      set({ isLoading: true });
-      const res = await api.post('/auth/sso', data);
-      const { accessToken, user } = res.data?.data || {};
-      if (accessToken && user) {
-        setApiToken(accessToken);
-        set({
-          user,
-          accessToken,
-          isAuthenticated: true,
-          isLoading: false,
-        });
-        return { success: true };
-      }
-      set({ isLoading: false });
-      return { success: false, error: 'Invalid response from auth server.' };
-    } catch (err: any) {
-      set({ isLoading: false });
-      return { success: false, error: err.message || 'SSO Login failed.' };
-    }
-  },
-
   googleLogin: async (data) => {
     try {
       set({ isLoading: true });
-      const res = await api.post('/auth/google', data);
+      const role = data.role === 'ADMIN' ? 'TEACHER' : data.role;
+      const res = await api.post('/auth/google', { ...data, role });
       const { accessToken, user } = res.data?.data || {};
       if (accessToken && user) {
-        setApiToken(accessToken);
-        set({
-          user,
-          accessToken,
-          isAuthenticated: true,
-          isLoading: false,
-        });
+        applySession(set, user, accessToken);
         return { success: true };
       }
       set({ isLoading: false });
       return { success: false, error: 'Invalid response from auth server.' };
     } catch (err: any) {
       set({ isLoading: false });
-      return { success: false, error: err.message || 'Google Login failed.' };
+      return { success: false, error: err.message || 'Google sign-in failed.' };
+    }
+  },
+
+  ssoLogin: async (data) => {
+    if (!data.token) {
+      return { success: false, error: 'Missing SSO token.' };
+    }
+    return get().googleLogin({
+      token: data.token,
+      role: data.role === 'ADMIN' ? 'TEACHER' : data.role || 'TEACHER',
+      isSignUp: data.isSignUp === true,
+    });
+  },
+
+  signInWithOtp: async (email) => {
+    try {
+      set({ isLoading: true });
+      await api.post('/auth/otp/request', { email });
+      set({ isLoading: false });
+      return { success: true };
+    } catch (err: any) {
+      set({ isLoading: false });
+      const status = err?.response?.status;
+      if (status === 404) {
+        return {
+          success: false,
+          error: 'Email code login is not available. Sign in with Google instead.',
+        };
+      }
+      return {
+        success: false,
+        error: err?.response?.data?.error || err.message || 'Failed to send login code.',
+      };
+    }
+  },
+
+  verifyOtp: async (email, code, role = 'STUDENT') => {
+    try {
+      set({ isLoading: true });
+      const res = await api.post('/auth/otp/verify', { email, code, role });
+      const { accessToken, user } = res.data?.data || {};
+      if (accessToken && user) {
+        applySession(set, user, accessToken);
+        return { success: true };
+      }
+      set({ isLoading: false });
+      return { success: false, error: 'Invalid response from auth server.' };
+    } catch (err: any) {
+      set({ isLoading: false });
+      const status = err?.response?.status;
+      if (status === 404) {
+        return {
+          success: false,
+          error: 'Email code login is not available. Sign in with Google instead.',
+        };
+      }
+      return {
+        success: false,
+        error: err?.response?.data?.error || err.message || 'Invalid or expired code.',
+      };
     }
   },
 
@@ -357,13 +291,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       const res = await api.post('/auth/signup', data);
       const { accessToken, user } = res.data?.data || {};
       if (accessToken && user) {
-        setApiToken(accessToken);
-        set({
-          user,
-          accessToken,
-          isAuthenticated: true,
-          isLoading: false,
-        });
+        applySession(set, user, accessToken);
         return { success: true };
       }
       set({ isLoading: false });
@@ -377,13 +305,9 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   logout: async () => {
     try {
       await api.post('/auth/logout');
-    } catch (err) {
-      // Ignore failures on logout endpoint and proceed to clear client auth
+    } catch {
+      // Logout endpoint failures must not keep the client signed in.
     } finally {
-      try {
-        const supabase = createClient();
-        await supabase.auth.signOut();
-      } catch (e) {}
       get().clearAuth();
     }
   },
@@ -464,3 +388,8 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     }
   },
 }));
+
+/** Prefer a token set during the /auth/me round-trip (e.g. a concurrent refresh) over the bootstrap one. */
+function getCurrentToken(fallback: string): string {
+  return useAuthStore.getState().accessToken ?? fallback;
+}

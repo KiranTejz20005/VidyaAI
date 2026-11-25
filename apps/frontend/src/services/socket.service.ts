@@ -1,4 +1,5 @@
-import { io, Socket } from 'socket.io-client';
+import type { Socket } from 'socket.io-client';
+import { disconnectSocket, getSocket } from '../sockets/socket.client';
 import { useSocketStore } from '../store/socket.store';
 
 class SocketService {
@@ -6,29 +7,18 @@ class SocketService {
   private currentUserId: string | null = null;
 
   public connect(userId: string) {
-    if (this.socket?.connected && this.currentUserId === userId) {
-      return; // Already connected with the correct user
-    }
-
-    if (this.socket) {
-      this.disconnect();
-    }
-
+    const shared = getSocket();
     this.currentUserId = userId;
-    
-    const url = process.env.NEXT_PUBLIC_SOCKET_URL || process.env.NEXT_PUBLIC_API_URL?.replace('/api/v1', '') || 'http://localhost:3001';
-    
-    this.socket = io(url, {
-      withCredentials: true,
-      transports: ['websocket', 'polling'], // Fallback safely
-      reconnection: true,
-      reconnectionAttempts: Infinity,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-      timeout: 20000,
-    });
+    if (this.socket === shared) {
+      return; // Listeners already attached to the live socket
+    }
 
+    this.socket = shared;
     this.setupListeners();
+    if (shared.connected) {
+      useSocketStore.getState().setConnected(true);
+      shared.emit('authenticate', { userId });
+    }
   }
 
   private setupListeners() {
@@ -43,7 +33,7 @@ class SocketService {
       }
       
       // If we were in a room, immediately rejoin to resume the stream
-      const activeRoom = store.activeRoom;
+      const activeRoom = useSocketStore.getState().activeRoom;
       if (activeRoom) {
         this.socket!.emit('join:group', { groupId: activeRoom });
       }
@@ -82,13 +72,13 @@ class SocketService {
     });
   }
 
+  /** Tears down the shared socket (logout, session change, impersonation enter/exit). */
   public disconnect() {
-    if (this.socket) {
-      this.socket.disconnect();
-      this.socket = null;
-    }
+    disconnectSocket();
+    this.socket = null;
     this.currentUserId = null;
     useSocketStore.getState().setConnected(false);
+    useSocketStore.getState().setActiveRoom(null);
   }
 
   public joinRoom(groupId: string) {
