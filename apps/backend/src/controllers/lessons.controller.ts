@@ -10,6 +10,7 @@ import {
 import prisma from '../config/prisma';
 import { getPdfQueue } from '../queues/pdf.queue';
 import { getRedisClient } from '../config/redis';
+import { getRequestOrgId, getRequestUserId } from '../security/request-context';
 
 /** Redis key for lesson plan PDF job status */
 const LP_PDF_KEY = (jobId: string) => `vidya:lessonplan:pdf:${jobId}`;
@@ -21,7 +22,7 @@ export const generatePlan = async (req: Request, res: Response): Promise<void> =
       res.status(400).json({ success: false, error: 'All fields are required' });
       return;
     }
-    const userId = req.user?.id || 'demo-faculty-id';
+    const userId = getRequestUserId(req);
 
     const plan = await createLessonPlan({
       title,
@@ -30,6 +31,7 @@ export const generatePlan = async (req: Request, res: Response): Promise<void> =
       duration,
       objectives,
       userId,
+      organizationId: getRequestOrgId(req) ?? null,
     });
 
     res.status(201).json({ success: true, data: plan });
@@ -41,7 +43,7 @@ export const generatePlan = async (req: Request, res: Response): Promise<void> =
 
 export const getPlans = async (req: Request, res: Response): Promise<void> => {
   try {
-    const userId = req.user?.id || 'demo-faculty-id';
+    const userId = getRequestUserId(req);
     const plans = await listUserLessonPlans(userId);
     res.json({ success: true, data: plans });
   } catch (error) {
@@ -53,7 +55,7 @@ export const getPlans = async (req: Request, res: Response): Promise<void> => {
 export const getPlan = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const plan = await getLessonPlanDetails(id);
+    const plan = await getLessonPlanDetails(id, getRequestUserId(req));
     if (!plan) {
       res.status(404).json({ success: false, error: 'Lesson plan not found' });
       return;
@@ -68,7 +70,11 @@ export const getPlan = async (req: Request, res: Response): Promise<void> => {
 export const removePlan = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    await deleteLessonPlan(id);
+    const deleted = await deleteLessonPlan(id, getRequestUserId(req));
+    if (!deleted) {
+      res.status(404).json({ success: false, error: 'Lesson plan not found' });
+      return;
+    }
     res.json({ success: true, message: 'Lesson plan deleted' });
   } catch (error) {
     logger.error(`[removePlan] ${error}`);
@@ -81,9 +87,13 @@ export const updatePlan = async (req: Request, res: Response): Promise<void> => 
     const { id } = req.params;
     const { title, subject, grade, duration, objectives, content } = req.body;
 
-    // In a real app we'd check ownership here via userId from req.user
+    const owned = await getLessonPlanDetails(id, getRequestUserId(req));
+    if (!owned) {
+      res.status(404).json({ success: false, error: 'Lesson plan not found' });
+      return;
+    }
     const updated = await prisma.lessonPlan.update({
-      where: { id },
+      where: { id: owned.id },
       data: {
         title: title ?? undefined,
         subject: subject ?? undefined,
@@ -110,17 +120,10 @@ export const exportLessonPdf = async (req: Request, res: Response): Promise<void
   const userId = req.user?.id;
 
   try {
-    // Verify lesson plan exists and user owns it
-    const plan = await prisma.lessonPlan.findUnique({ where: { id } });
+    // Only the plan's owner may export it; anything else is reported as missing.
+    const plan = userId ? await getLessonPlanDetails(id, userId) : null;
     if (!plan) {
       res.status(404).json({ success: false, error: 'Lesson plan not found' });
-      return;
-    }
-
-    // Simple ownership check — demo-faculty-id is allowed for backward compat
-    const isOwner = !plan.userId || plan.userId === userId || plan.userId === 'demo-faculty-id';
-    if (!isOwner) {
-      res.status(403).json({ success: false, error: 'Unauthorized to export this lesson plan' });
       return;
     }
 

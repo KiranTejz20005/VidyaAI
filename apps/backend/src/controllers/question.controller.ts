@@ -1,5 +1,28 @@
 import { Request, Response } from 'express';
+import type { Prisma } from '@prisma/client';
 import prisma from '../config/prisma';
+import { logger } from '../utils/logger';
+import { getRequestOrgId, isAdminRole, isSuperAdmin } from '../security/request-context';
+
+const MAX_QUESTIONS_PER_PAGE = 100;
+
+/**
+ * Questions visible to the caller: those of their organization, plus their own
+ * legacy questions that predate organization tagging. Only a SUPER_ADMIN
+ * without a selected organization sees every tenant.
+ */
+function questionReadWhere(req: Request): Prisma.QuestionWhereInput {
+  const orgId = getRequestOrgId(req);
+  if (isSuperAdmin(req.user?.role) && !orgId) return {};
+  const ownLegacy: Prisma.QuestionWhereInput = { organizationId: null, authorId: req.user?.id ?? '' };
+  return orgId ? { OR: [{ organizationId: orgId }, ownLegacy] } : ownLegacy;
+}
+
+/** Questions the caller may change: visible ones they authored, or any visible one for an admin. */
+function questionWriteWhere(req: Request): Prisma.QuestionWhereInput {
+  if (isAdminRole(req.user?.role)) return questionReadWhere(req);
+  return { AND: [questionReadWhere(req), { authorId: req.user?.id ?? '' }] };
+}
 
 export const createQuestion = async (req: Request, res: Response) => {
   try {
@@ -26,19 +49,27 @@ export const createQuestion = async (req: Request, res: Response) => {
         bloomLevel,
         author: {
           connect: { id: req.user.id }
-        }
+        },
+        ...(getRequestOrgId(req) ? { organization: { connect: { id: getRequestOrgId(req) as string } } } : {}),
       }
     });
 
     res.status(201).json({ success: true, data: question });
   } catch (error) {
-    res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Failed to create question' });
+    logger.error({ err: error }, '[createQuestion]');
+    res.status(500).json({ success: false, error: 'Failed to create question' });
   }
 };
 
-export const getQuestions = async (_req: Request, res: Response) => {
+export const getQuestions = async (req: Request, res: Response) => {
   try {
+    const limit = Math.min(MAX_QUESTIONS_PER_PAGE, Math.max(1, Number(req.query.limit) || MAX_QUESTIONS_PER_PAGE));
+    const page = Math.max(1, Number(req.query.page) || 1);
     const questions = await prisma.question.findMany({
+      where: questionReadWhere(req),
+      orderBy: { createdAt: 'desc' },
+      skip: (page - 1) * limit,
+      take: limit,
       include: {
         author: { select: { firstName: true, lastName: true } }
       }
@@ -51,8 +82,8 @@ export const getQuestions = async (_req: Request, res: Response) => {
 
 export const getQuestionById = async (req: Request, res: Response) => {
   try {
-    const question = await prisma.question.findUnique({
-      where: { id: req.params.id },
+    const question = await prisma.question.findFirst({
+      where: { id: req.params.id, ...questionReadWhere(req) },
       include: {
         author: { select: { firstName: true, lastName: true } }
       }
@@ -81,8 +112,16 @@ export const updateQuestion = async (req: Request, res: Response) => {
     }
 
     const { content, options, answer, difficulty, bloomLevel } = req.body;
+    const existing = await prisma.question.findFirst({
+      where: { id: req.params.id, ...questionWriteWhere(req) },
+      select: { id: true },
+    });
+    if (!existing) {
+      res.status(404).json({ success: false, error: 'Question not found' });
+      return;
+    }
     const question = await prisma.question.update({
-      where: { id: req.params.id },
+      where: { id: existing.id },
       data: { content, options, answer, difficulty, bloomLevel }
     });
     res.json({ success: true, data: question });
@@ -104,8 +143,16 @@ export const deleteQuestion = async (req: Request, res: Response) => {
       return;
     }
 
+    const existing = await prisma.question.findFirst({
+      where: { id: req.params.id, ...questionWriteWhere(req) },
+      select: { id: true },
+    });
+    if (!existing) {
+      res.status(404).json({ success: false, error: 'Question not found' });
+      return;
+    }
     await prisma.question.delete({
-      where: { id: req.params.id }
+      where: { id: existing.id }
     });
     res.json({ success: true, data: {} });
   } catch (error) {
@@ -127,7 +174,7 @@ export const checkDuplicateQuestion = async (req: Request, res: Response) => {
       return;
     }
 
-    const orgId = req.user.organizationId || undefined;
+    const orgId = getRequestOrgId(req);
 
     let candidateQuestions: Array<{ id: string; content: string; options?: string[]; answer?: string }> = Array.isArray(candidates) ? candidates : [];
 
@@ -164,9 +211,10 @@ export const checkDuplicateQuestion = async (req: Request, res: Response) => {
 
     res.json({ success: true, data: result });
   } catch (error) {
+    logger.error({ err: error }, '[checkDuplicateQuestion]');
     res.status(500).json({
       success: false,
-      error: error instanceof Error ? error.message : 'Failed to perform duplicate detection check',
+      error: 'Failed to perform duplicate detection check',
     });
   }
 };

@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { sendSuccess, sendCreated, sendNoContent, sendNotFound, sendForbidden } from '../common/response';
-import { getRequestUserId, getRequestOrgId } from '../../security/request-context';
+import { getRequestUserId, getRequestOrgId, requireRequestOrgId } from '../../security/request-context';
+import { ApiError } from '../common/errors';
 import { AITutorService } from '../../services/ai-tutor.service';
 import prisma from '../../config/prisma';
 import { AIOrchestrator } from '../../services/ai/ai-orchestrator.service';
@@ -40,8 +41,19 @@ export const listSessions = async (req: Request, res: Response): Promise<void> =
   sendSuccess(res, { data: sessions.map(serializeSession) });
 };
 
+/**
+ * Resolves the session a request acts on. Tutor sessions are private to the
+ * student who owns them: an id belonging to anyone else is reported as 404.
+ */
 async function resolveSessionId(sessionId: string, userId: string, orgId?: string | null): Promise<string> {
-  if (sessionId !== 'default') return sessionId;
+  if (sessionId !== 'default') {
+    const owned = await prisma.tutorSession.findFirst({
+      where: { id: sessionId, studentId: userId },
+      select: { id: true },
+    });
+    if (!owned) throw ApiError.notFound('Tutor session not found');
+    return owned.id;
+  }
 
   let session = await prisma.tutorSession.findFirst({
     where: { studentId: userId, status: 'ACTIVE' },
@@ -206,14 +218,14 @@ export const getConfig = async (req: Request, res: Response): Promise<void> => {
 };
 
 export const updateConfig = async (req: Request, res: Response): Promise<void> => {
-  const orgId = getRequestOrgId(req);
+  const orgId = requireRequestOrgId(req);
   const { allowDirectAnswers, maxExplanationDepth } = req.body;
 
   const config = await prisma.teacherTutorConfig.upsert({
-    where: { organizationId: orgId! },
+    where: { organizationId: orgId },
     update: { allowDirectAnswers, maxExplanationDepth },
     create: {
-      organizationId: orgId!,
+      organizationId: orgId,
       allowDirectAnswers: allowDirectAnswers ?? false,
       maxExplanationDepth: maxExplanationDepth ?? 3,
     },

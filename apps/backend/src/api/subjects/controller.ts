@@ -1,11 +1,18 @@
 import { Request, Response } from 'express';
 import prisma from '../../config/prisma';
-import { getRequestUserId, requireRequestOrgId } from '../../security/request-context';
+import { getRequestUserId, requireRequestOrgId, orgScope } from '../../security/request-context';
 import { parsePagination, buildPagination } from '../common/pagination';
 import { sendSuccess, sendCreated } from '../common/response';
 import { ApiError } from '../common/errors';
 import { serializeSubject, serializeSubjectSyllabus } from './serializers';
 import type { CreateSubjectDto, UpdateSubjectDto } from './dto';
+
+/** Loads a subject (class group) only when it belongs to the caller's tenant. */
+async function findSubjectInOrg(req: Request, id: string) {
+  const subject = await prisma.classGroup.findFirst({ where: { id, ...orgScope(req) } });
+  if (!subject) throw ApiError.notFound('Subject not found');
+  return subject;
+}
 
 export async function listSubjects(req: Request, res: Response): Promise<void> {
   const { page, limit, sort, order, search } = parsePagination(req);
@@ -60,8 +67,7 @@ export async function createSubject(req: Request, res: Response): Promise<void> 
 
 export async function getSubject(req: Request, res: Response): Promise<void> {
   const { id } = req.params;
-  const subject = await prisma.classGroup.findUnique({ where: { id } });
-  if (!subject) throw ApiError.notFound('Subject not found');
+  const subject = await findSubjectInOrg(req, id);
 
   sendSuccess(res, { data: serializeSubject(subject as any) });
 }
@@ -70,8 +76,7 @@ export async function updateSubject(req: Request, res: Response): Promise<void> 
   const { id } = req.params;
   const body = req.body as UpdateSubjectDto;
 
-  const existing = await prisma.classGroup.findUnique({ where: { id } });
-  if (!existing) throw ApiError.notFound('Subject not found');
+  const existing = await findSubjectInOrg(req, id);
 
   const subject = await prisma.classGroup.update({
     where: { id },
@@ -87,8 +92,7 @@ export async function updateSubject(req: Request, res: Response): Promise<void> 
 export async function deleteSubject(req: Request, res: Response): Promise<void> {
   const { id } = req.params;
 
-  const existing = await prisma.classGroup.findUnique({ where: { id } });
-  if (!existing) throw ApiError.notFound('Subject not found');
+  await findSubjectInOrg(req, id);
 
   await prisma.classGroup.delete({ where: { id } });
 
@@ -98,11 +102,10 @@ export async function deleteSubject(req: Request, res: Response): Promise<void> 
 export async function getSubjectSyllabus(req: Request, res: Response): Promise<void> {
   const { id } = req.params;
 
-  const subject = await prisma.classGroup.findUnique({ where: { id } });
-  if (!subject) throw ApiError.notFound('Subject not found');
+  const subject = await findSubjectInOrg(req, id);
 
   const syllabus = await prisma.syllabus.findFirst({
-    where: { subject: subject.name },
+    where: { subject: subject.name, organizationId: subject.organizationId },
     include: {
       topics: {
         orderBy: { topicOrder: 'asc' },
@@ -119,8 +122,7 @@ export async function getSubjectSyllabus(req: Request, res: Response): Promise<v
 export async function getSubjectTeachers(req: Request, res: Response): Promise<void> {
   const { id } = req.params;
 
-  const subject = await prisma.classGroup.findUnique({ where: { id } });
-  if (!subject) throw ApiError.notFound('Subject not found');
+  await findSubjectInOrg(req, id);
 
   sendSuccess(res, { data: [] });
 }

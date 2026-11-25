@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { asyncHandler } from '../utils/async-handler';
 import { authenticate } from '../middlewares/auth.middleware';
+import { requirePermission } from '../security/access-control';
+import { PERMISSIONS } from '../security/permissions';
 import { 
   generateWorksheet, 
   getSheets, 
@@ -12,9 +14,9 @@ const router = Router();
 
 router.use(authenticate);
 
-router.post('/', asyncHandler(generateWorksheet));
+router.post('/', requirePermission(PERMISSIONS.MANAGE_SYLLABUS), asyncHandler(generateWorksheet));
 router.get('/', asyncHandler(getSheets));
 router.get('/:id', asyncHandler(getSheet));
-router.delete('/:id', asyncHandler(removeSheet));
+router.delete('/:id', requirePermission(PERMISSIONS.MANAGE_SYLLABUS), asyncHandler(removeSheet));
 
 export default router;

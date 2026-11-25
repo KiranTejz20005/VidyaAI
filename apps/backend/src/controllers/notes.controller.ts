@@ -5,6 +5,7 @@ import {
   getNoteDetails, 
   deleteNote 
 } from '../services/notes.service';
+import { getRequestOrgId, getRequestUserId } from '../security/request-context';
 
 export const generateNotes = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -13,7 +14,7 @@ export const generateNotes = async (req: Request, res: Response): Promise<void> 
       res.status(400).json({ success: false, error: 'All fields are required' });
       return;
     }
-    const userId = req.user?.id || 'demo-faculty-id';
+    const userId = getRequestUserId(req);
 
     const note = await createGeneratedNotes({
       title,
@@ -21,6 +22,7 @@ export const generateNotes = async (req: Request, res: Response): Promise<void> 
       topic,
       type,
       userId,
+      organizationId: getRequestOrgId(req) ?? null,
     });
 
     res.status(201).json({ success: true, data: note });
@@ -31,7 +33,7 @@ export const generateNotes = async (req: Request, res: Response): Promise<void> 
 
 export const getNotes = async (req: Request, res: Response): Promise<void> => {
   try {
-    const userId = req.user?.id || 'demo-faculty-id';
+    const userId = getRequestUserId(req);
     const notes = await listUserNotes(userId);
     res.json({ success: true, data: notes });
   } catch (error) {
@@ -42,7 +44,7 @@ export const getNotes = async (req: Request, res: Response): Promise<void> => {
 export const getNote = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const note = await getNoteDetails(id);
+    const note = await getNoteDetails(id, getRequestUserId(req));
     if (!note) {
       res.status(404).json({ success: false, error: 'Notes not found' });
       return;
@@ -56,7 +58,11 @@ export const getNote = async (req: Request, res: Response): Promise<void> => {
 export const removeNote = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    await deleteNote(id);
+    const deleted = await deleteNote(id, getRequestUserId(req));
+    if (!deleted) {
+      res.status(404).json({ success: false, error: 'Notes not found' });
+      return;
+    }
     res.json({ success: true, message: 'Notes deleted successfully' });
   } catch (error) {
     res.status(500).json({ success: false, error: 'Failed to delete notes' });

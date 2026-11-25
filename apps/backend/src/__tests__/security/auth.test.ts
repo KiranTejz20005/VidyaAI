@@ -160,6 +160,7 @@ describe('POST /login (enumeration-safe)', () => {
     id: 'uid-1',
     email: 'student@vidyaai.com',
     role: 'STUDENT',
+    status: 'ACTIVE',
     passwordHash: 'hashed',
     organizationId: null,
     activeOrganizationId: null,
@@ -190,7 +191,10 @@ describe('POST /login (enumeration-safe)', () => {
 
     expect(res.body.success).toBe(true);
     expect(res.body.data.accessToken).toBe('signed-token');
-    expect(res.body.data.refreshToken).toBeDefined();
+    // The refresh token is delivered only as an httpOnly cookie, never in the body.
+    expect(res.body.data.refreshToken).toBeUndefined();
+    const cookies = ([] as string[]).concat(res.headers['set-cookie'] ?? []);
+    expect(cookies.some((c) => /httponly/i.test(c))).toBe(true);
     expect(res.body.data.user.email).toBe('student@vidyaai.com');
     expect(prisma.refreshToken.create).toHaveBeenCalled();
     expect(AuditService.logAuditEvent).toHaveBeenCalled();

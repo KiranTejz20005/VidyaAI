@@ -1,8 +1,9 @@
 import { Request, Response } from 'express';
 import { sendSuccess, sendBadRequest } from '../common/response';
-import { getRequestOrgId } from '../../security/request-context';
+import { getRequestOrgId, requireRequestOrgId } from '../../security/request-context';
 import { AnalyticsService } from '../../services/analytics.service';
 import prisma from '../../config/prisma';
+import { assertStudentAccess } from '../learning/student-access';
 import {
   serializeDashboard,
   serializeAssignmentAnalytics,
@@ -11,11 +12,38 @@ import {
   serializeTeacherPerformance,
   serializeUsageStats,
   serializeAiUsage,
-  serializeTrendData,
 } from './serializers';
 
+/** Upper bound on evaluation rows loaded for score aggregation. */
+const MAX_SCORE_ROWS = 5000;
+
+type ScoreRow = { score: number; totalMarks: number };
+
+function toPercentage(row: ScoreRow): number {
+  return row.totalMarks > 0 ? (row.score / row.totalMarks) * 100 : 0;
+}
+
+function gradeDistribution(rows: ScoreRow[]): Record<string, number> {
+  const distribution: Record<string, number> = { A: 0, B: 0, C: 0, D: 0, F: 0 };
+  for (const row of rows) {
+    const pct = toPercentage(row);
+    if (pct >= 90) distribution.A++;
+    else if (pct >= 80) distribution.B++;
+    else if (pct >= 70) distribution.C++;
+    else if (pct >= 60) distribution.D++;
+    else distribution.F++;
+  }
+  return distribution;
+}
+
+function averagePercentage(rows: ScoreRow[]): number {
+  if (rows.length === 0) return 0;
+  const avg = rows.reduce((sum, r) => sum + toPercentage(r), 0) / rows.length;
+  return Math.round(avg * 100) / 100;
+}
+
 export const getDashboard = async (req: Request, res: Response): Promise<void> => {
-  const orgId = getRequestOrgId(req);
+  const orgId = requireRequestOrgId(req);
 
   const stats = await AnalyticsService.getAdminAnalytics(orgId);
 
@@ -23,47 +51,54 @@ export const getDashboard = async (req: Request, res: Response): Promise<void> =
 };
 
 export const getAssignmentAnalytics = async (req: Request, res: Response): Promise<void> => {
-  const orgId = getRequestOrgId(req);
+  const orgId = requireRequestOrgId(req);
 
-  const assignments = await prisma.assignment.findMany({
-    where: orgId ? { organizationId: orgId } : {},
-    include: { submissions: true },
-  });
+  const [totalAssignments, totalSubmissions, evaluations] = await Promise.all([
+    prisma.assignment.count({ where: { organizationId: orgId } }),
+    prisma.studentSubmission.count({ where: { organizationId: orgId } }),
+    prisma.submissionEvaluation.findMany({
+      where: { submission: { organizationId: orgId } },
+      select: { score: true, totalMarks: true },
+      orderBy: { createdAt: 'desc' },
+      take: MAX_SCORE_ROWS,
+    }),
+  ]);
 
-  const totalAssignments = assignments.length;
-  const allSubmissions = assignments.flatMap((a) => a.submissions);
-  const submissionRate = totalAssignments > 0 ? allSubmissions.length / totalAssignments : 0;
-  const averageScore = allSubmissions.length > 0 ? 72.5 : 0;
+  const submissionRate = totalAssignments > 0 ? totalSubmissions / totalAssignments : 0;
 
   sendSuccess(res, {
     data: serializeAssignmentAnalytics({
       totalAssignments,
-      averageScore,
+      averageScore: averagePercentage(evaluations),
       submissionRate: Math.round(submissionRate * 100) / 100,
-      gradeDistribution: { A: 25, B: 35, C: 25, D: 10, F: 5 },
+      gradeDistribution: gradeDistribution(evaluations),
     }),
   });
 };
 
-export const getQuizAnalytics = async (_req: Request, res: Response): Promise<void> => {
-  const quizzes = await prisma.quizSession.findMany({
-    include: { questions: true },
-  });
+export const getQuizAnalytics = async (req: Request, res: Response): Promise<void> => {
+  const orgId = requireRequestOrgId(req);
+  const where = { organizationId: orgId };
 
-  const totalQuizzes = quizzes.length;
-  const averageScore =
-    quizzes.length > 0
-      ? quizzes.reduce((sum, q) => sum + (q.masteryLevel || 0), 0) / quizzes.length
-      : 0;
-  const completionRate = totalQuizzes > 0 ? 0.85 : 0;
+  const [aggregate, completedQuizzes, bloomGroups] = await Promise.all([
+    prisma.quizSession.aggregate({ where, _count: { _all: true }, _avg: { masteryLevel: true } }),
+    prisma.quizSession.count({ where: { ...where, timeTakenSeconds: { gt: 0 } } }),
+    prisma.quizSessionQuestion.groupBy({
+      by: ['bloomLevel'],
+      where: { session: where },
+      _count: { _all: true },
+    }),
+  ]);
+
+  const totalQuizzes = aggregate._count._all;
+  const averageScore = aggregate._avg.masteryLevel ?? 0;
+  const completionRate = totalQuizzes > 0 ? Math.round((completedQuizzes / totalQuizzes) * 100) / 100 : 0;
 
   const questionDistribution: Record<string, number> = {};
-  quizzes.forEach((q) => {
-    q.questions.forEach((qt) => {
-      const level = qt.bloomLevel || 'REMEMBER';
-      questionDistribution[level] = (questionDistribution[level] || 0) + 1;
-    });
-  });
+  for (const group of bloomGroups) {
+    const level = group.bloomLevel || 'REMEMBER';
+    questionDistribution[level] = (questionDistribution[level] || 0) + group._count._all;
+  }
 
   sendSuccess(res, {
     data: serializeQuizAnalytics({
@@ -83,88 +118,101 @@ export const getStudentPerformance = async (req: Request, res: Response): Promis
     return;
   }
 
-  const performance = await AnalyticsService.getStudentPerformance(studentId);
+  await assertStudentAccess(req, studentId);
+  const orgId = getRequestOrgId(req);
+
+  const performance = await AnalyticsService.getStudentPerformance(studentId, orgId);
 
   sendSuccess(res, { data: serializeStudentPerformance(performance) });
 };
 
 export const getTeacherPerformance = async (req: Request, res: Response): Promise<void> => {
-  const orgId = getRequestOrgId(req);
+  const orgId = requireRequestOrgId(req);
 
   const teachers = await prisma.user.findMany({
-    where: { role: 'TEACHER', ...(orgId ? { organizationId: orgId } : {}) },
+    where: { role: 'TEACHER', organizationId: orgId },
+    select: { id: true, firstName: true, lastName: true },
+    orderBy: { createdAt: 'desc' },
+    take: 500,
   });
+  const teacherIds = teachers.map((t) => t.id);
 
-  const performance = await Promise.all(
-    teachers.map(async (teacher) => {
-      const assignments = await prisma.assignment.count({
-        where: { createdById: teacher.id },
-      });
+  const [assignmentCounts, paperRows, evaluations] = await Promise.all([
+    prisma.assignment.groupBy({
+      by: ['createdById'],
+      where: { organizationId: orgId, createdById: { in: teacherIds } },
+      _count: { _all: true },
+    }),
+    prisma.generatedPaper.findMany({
+      where: { organizationId: orgId, assignment: { createdById: { in: teacherIds } } },
+      select: { assignment: { select: { createdById: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: MAX_SCORE_ROWS,
+    }),
+    prisma.submissionEvaluation.findMany({
+      where: { submission: { organizationId: orgId, assignment: { createdById: { in: teacherIds } } } },
+      select: { score: true, totalMarks: true, submission: { select: { assignment: { select: { createdById: true } } } } },
+      orderBy: { createdAt: 'desc' },
+      take: MAX_SCORE_ROWS,
+    }),
+  ]);
 
-      return serializeTeacherPerformance({
-        teacherId: teacher.id,
-        name: `${teacher.firstName} ${teacher.lastName}`,
-        totalAssignments: assignments,
-        averageClassScore: 70 + Math.random() * 20,
-        papersGenerated: Math.floor(Math.random() * 30) + 5,
-      });
+  const assignmentsByTeacher = new Map<string, number>();
+  for (const row of assignmentCounts) {
+    if (row.createdById) assignmentsByTeacher.set(row.createdById, row._count._all);
+  }
+
+  const papersByTeacher = new Map<string, number>();
+  for (const paper of paperRows) {
+    const teacherId = paper.assignment.createdById;
+    if (teacherId) papersByTeacher.set(teacherId, (papersByTeacher.get(teacherId) ?? 0) + 1);
+  }
+
+  const scoresByTeacher = new Map<string, ScoreRow[]>();
+  for (const evaluation of evaluations) {
+    const teacherId = evaluation.submission.assignment.createdById;
+    if (!teacherId) continue;
+    const rows = scoresByTeacher.get(teacherId) ?? [];
+    rows.push({ score: evaluation.score, totalMarks: evaluation.totalMarks });
+    scoresByTeacher.set(teacherId, rows);
+  }
+
+  const performance = teachers.map((teacher) =>
+    serializeTeacherPerformance({
+      teacherId: teacher.id,
+      name: `${teacher.firstName} ${teacher.lastName}`,
+      totalAssignments: assignmentsByTeacher.get(teacher.id) ?? 0,
+      averageClassScore: averagePercentage(scoresByTeacher.get(teacher.id) ?? []),
+      papersGenerated: papersByTeacher.get(teacher.id) ?? 0,
     })
   );
 
   sendSuccess(res, { data: performance });
 };
 
-export const getUsageStats = async (_req: Request, res: Response): Promise<void> => {
-  const totalRequests = await prisma.promptExecution.count();
-  const uniqueUsers = await prisma.promptExecution.groupBy({
-    by: ['organizationId'],
-  });
+export const getUsageStats = async (req: Request, res: Response): Promise<void> => {
+  const orgId = requireRequestOrgId(req);
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+  const [totalRequests, users, lastThirtyDays] = await Promise.all([
+    prisma.promptExecution.count({ where: { organizationId: orgId } }),
+    prisma.promptExecution.groupBy({ by: ['userId'], where: { organizationId: orgId } }),
+    prisma.promptExecution.count({ where: { organizationId: orgId, createdAt: { gte: thirtyDaysAgo } } }),
+  ]);
 
   sendSuccess(res, {
     data: serializeUsageStats({
       totalRequests,
-      uniqueUsers: uniqueUsers.length || 1,
-      endpointBreakdown: {
-        '/api/v1/assignments': 1250,
-        '/api/v1/quizzes': 890,
-        '/api/v1/tutor': 456,
-      },
-      dailyAverage: Math.round(totalRequests / 30),
+      uniqueUsers: users.length,
+      endpointBreakdown: {},
+      dailyAverage: Math.round(lastThirtyDays / 30),
     }),
   });
 };
 
 export const getAiUsage = async (req: Request, res: Response): Promise<void> => {
-  const orgId = getRequestOrgId(req);
+  const orgId = requireRequestOrgId(req);
   const stats = await AnalyticsService.getAdminAnalytics(orgId);
 
   sendSuccess(res, { data: serializeAiUsage(stats.aiAnalytics) });
-};
-
-export const getTrends = async (req: Request, res: Response): Promise<void> => {
-  const { metric, period } = req.query;
-
-  sendSuccess(res, {
-    data: serializeTrendData({
-      labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
-      values: [65, 72, 68, 85, 79, 90],
-      metric: (metric as string) ?? 'score',
-      period: (period as string) ?? '30d',
-    }),
-  });
-};
-
-export const exportAnalytics = async (req: Request, res: Response): Promise<void> => {
-  const { type } = req.params;
-
-  const data = { message: `Analytics export in ${type} format` };
-
-  if (type === 'csv') {
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', 'attachment; filename=analytics.csv');
-    res.send('metric,value\nscore,85\ncompletion,78');
-    return;
-  }
-
-  sendSuccess(res, { data });
 };

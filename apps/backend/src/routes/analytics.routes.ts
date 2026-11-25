@@ -6,31 +6,31 @@ import {
   triggerRecommendations 
 } from '../controllers/analytics.controller';
 import { authenticate } from '../middlewares/auth.middleware';
+import { requireRole } from '../security/role.middleware';
 import { asyncHandler } from '../utils/async-handler';
+import prisma from '../config/prisma';
+import { requireRequestOrgId } from '../security/request-context';
 
 const router = Router();
 
 router.use(authenticate);
 
-import prisma from '../config/prisma';
-
-// All authenticated users can view their relevant dashboard stats
+// Organization-level dashboard stats for the caller's tenant
 router.get('/stats', asyncHandler(getDashboardStats));
+// Students may read only their own stats; staff only students of their organization
 router.get('/student/:studentId', asyncHandler(getStudentStats));
-router.get('/group/:groupId', asyncHandler(getGroupStats));
+router.get('/group/:groupId', requireRole('TEACHER', 'ADMIN'), asyncHandler(getGroupStats));
 
-// New endpoint for fetching classes (groups) for analytics
-router.get('/groups', asyncHandler(async (req, res) => {
-  const orgId = req.user?.organizationId;
-  if (!orgId) {
-    res.status(401).json({ success: false, error: 'Unauthorized' });
-    return;
-  }
+// Classes (groups) of the caller's organization for analytics
+router.get('/groups', requireRole('TEACHER', 'ADMIN'), asyncHandler(async (req, res) => {
+  const orgId = requireRequestOrgId(req);
   const classes = await prisma.class.findMany({
     where: { organizationId: orgId },
     include: {
       _count: { select: { students: true } }
-    }
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 500,
   });
   
   res.json({
@@ -43,6 +43,7 @@ router.get('/groups', asyncHandler(async (req, res) => {
     }))
   });
 }));
-router.post('/recommendations', asyncHandler(triggerRecommendations));
+// AI recommendations call a paid LLM; staff only, confined to their organization
+router.post('/recommendations', requireRole('TEACHER', 'ADMIN'), asyncHandler(triggerRecommendations));
 
 export default router;

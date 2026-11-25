@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { MAX_JSON_INPUT_CHARS, safeJsonParse } from '../utils/safe-json';
 
 export interface IsolatedQuestion {
   question: Record<string, unknown>;
@@ -110,7 +111,7 @@ function scanQuestionLikeObjects(text: string): string[] {
         if (depth === 0) {
           const fragment = text.slice(i, j + 1);
           try {
-            const parsed = JSON.parse(fragment) as Record<string, unknown>;
+            const parsed = safeJsonParse<Record<string, unknown>>(fragment);
             if (
               parsed &&
               typeof parsed === 'object' &&
@@ -250,7 +251,7 @@ function tryPartialRecovery(fragment: string): Record<string, unknown> | null {
   const innerObj = extractInnerCompleteObject(fragment);
   if (innerObj) {
     try {
-      const obj = JSON.parse(innerObj) as Record<string, unknown>;
+      const obj = safeJsonParse<Record<string, unknown>>(innerObj);
       if (obj && typeof obj === 'object' && !Array.isArray(obj)) return obj;
     } catch {
       // fall through
@@ -293,8 +294,9 @@ function extractPropertiesFromBrokenObject(text: string): Record<string, unknown
   let match;
   while ((match = keyValueRegex.exec(text)) !== null) {
     const key = match[1];
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
     let val: unknown = match[2];
-    try { val = JSON.parse(val as string); } catch { /* keep string */ }
+    try { val = safeJsonParse(val as string); } catch { /* keep string */ }
     obj[key] = val;
   }
   return Object.keys(obj).length > 0 ? obj : null;
@@ -457,6 +459,9 @@ function fullyRepairQuestion(raw: Record<string, unknown>, index: number, recove
 }
 
 export function isolateAndRepair(rawOutput: string): IsolationResult {
+  if (rawOutput.length > MAX_JSON_INPUT_CHARS) {
+    return { questions: [], totalDetected: 0, recoveredCount: 0, discardedCount: 0, discardedIndices: [], malformedNodeCount: 1, repairTypes: ['oversized_input_rejected'] };
+  }
   const sanitized = sanitizeRawProviderOutput(rawOutput);
   let fragments = extractQuestionsArray(sanitized);
   const completeQuestionObjects = scanQuestionLikeObjects(sanitized);
@@ -485,7 +490,7 @@ export function isolateAndRepair(rawOutput: string): IsolationResult {
     let method: 'direct' | 'repaired' | 'partial' = 'direct';
 
     try {
-      parsed = JSON.parse(fragment) as Record<string, unknown>;
+      parsed = safeJsonParse<Record<string, unknown>>(fragment);
       if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) parsed = null;
     } catch {
       method = 'repaired';
@@ -493,7 +498,7 @@ export function isolateAndRepair(rawOutput: string): IsolationResult {
       const repaired = tryRepairFragment(fragment);
       if (repaired) {
         try {
-          parsed = JSON.parse(repaired) as Record<string, unknown>;
+          parsed = safeJsonParse<Record<string, unknown>>(repaired);
           if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) parsed = null;
         } catch {
           parsed = null;

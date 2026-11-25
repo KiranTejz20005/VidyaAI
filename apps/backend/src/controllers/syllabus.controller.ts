@@ -1,6 +1,29 @@
 import { Request, Response } from 'express';
 import prisma from '../config/prisma';
 import { logger } from '../utils/logger';
+import { getRequestOrgId } from '../security/request-context';
+import { syllabusReadWhere, syllabusWriteWhere } from '../services/syllabus-access.service';
+
+const SYLLABUS_INCLUDE = {
+  topics: {
+    orderBy: { topicOrder: 'asc' as const },
+    include: { subtopics: { orderBy: { topicOrder: 'asc' as const } } },
+  },
+};
+
+async function findWritableSyllabusId(req: Request, id: string): Promise<string | null> {
+  const found = await prisma.syllabus.findFirst({ where: { id, ...syllabusWriteWhere(req) }, select: { id: true } });
+  return found?.id ?? null;
+}
+
+/** A topic is writable when it belongs to the syllabus in the URL and that syllabus is writable. */
+async function findWritableTopicId(req: Request, syllabusId: string, topicId: string): Promise<string | null> {
+  const found = await prisma.syllabusTopic.findFirst({
+    where: { id: topicId, syllabusId, syllabus: syllabusWriteWhere(req) },
+    select: { id: true },
+  });
+  return found?.id ?? null;
+}
 
 // ── List all syllabuses ──
 export const getSyllabuses = async (req: Request, res: Response): Promise<void> => {
@@ -27,14 +50,9 @@ export const getSyllabuses = async (req: Request, res: Response): Promise<void> 
 // ── Get single syllabus ──
 export const getSyllabus = async (req: Request, res: Response): Promise<void> => {
   try {
-    const syllabus = await prisma.syllabus.findUnique({
-      where: { id: req.params.id },
-      include: {
-        topics: {
-          orderBy: { topicOrder: 'asc' },
-          include: { subtopics: { orderBy: { topicOrder: 'asc' } } },
-        },
-      },
+    const syllabus = await prisma.syllabus.findFirst({
+      where: { id: req.params.id, ...syllabusReadWhere(req) },
+      include: SYLLABUS_INCLUDE,
     });
     if (!syllabus) {
       res.status(404).json({ success: false, error: 'Syllabus not found' });
@@ -65,6 +83,7 @@ export const createSyllabus = async (req: Request, res: Response): Promise<void>
         grade,
         status: 'active',
         userId,
+        organizationId: getRequestOrgId(req) ?? null,
         topics: topics?.length
           ? {
               create: topics.map((t: any, idx: number) => ({
@@ -105,8 +124,13 @@ export const createSyllabus = async (req: Request, res: Response): Promise<void>
 export const updateSyllabus = async (req: Request, res: Response): Promise<void> => {
   try {
     const { title, subject, grade, status } = req.body;
+    const syllabusId = await findWritableSyllabusId(req, req.params.id);
+    if (!syllabusId) {
+      res.status(404).json({ success: false, error: 'Syllabus not found' });
+      return;
+    }
     const syllabus = await prisma.syllabus.update({
-      where: { id: req.params.id },
+      where: { id: syllabusId },
       data: {
         ...(title && { title }),
         ...(subject && { subject }),
@@ -134,7 +158,12 @@ export const updateSyllabus = async (req: Request, res: Response): Promise<void>
 // ── Delete syllabus ──
 export const deleteSyllabus = async (req: Request, res: Response): Promise<void> => {
   try {
-    await prisma.syllabus.delete({ where: { id: req.params.id } });
+    const syllabusId = await findWritableSyllabusId(req, req.params.id);
+    if (!syllabusId) {
+      res.status(404).json({ success: false, error: 'Syllabus not found' });
+      return;
+    }
+    await prisma.syllabus.delete({ where: { id: syllabusId } });
     res.json({ success: true, message: 'Syllabus deleted' });
   } catch (error: any) {
     if (error?.code === 'P2025') {
@@ -150,8 +179,13 @@ export const deleteSyllabus = async (req: Request, res: Response): Promise<void>
 export const updateTopic = async (req: Request, res: Response): Promise<void> => {
   try {
     const { completed, title, description, duration } = req.body;
+    const topicId = await findWritableTopicId(req, req.params.id, req.params.topicId);
+    if (!topicId) {
+      res.status(404).json({ success: false, error: 'Topic not found' });
+      return;
+    }
     const topic = await prisma.syllabusTopic.update({
-      where: { id: req.params.topicId },
+      where: { id: topicId },
       data: {
         ...(completed !== undefined && { completed }),
         ...(title && { title }),
@@ -175,8 +209,16 @@ export const updateTopic = async (req: Request, res: Response): Promise<void> =>
 export const updateSubtopic = async (req: Request, res: Response): Promise<void> => {
   try {
     const { completed, title } = req.body;
+    const topicId = await findWritableTopicId(req, req.params.id, req.params.topicId);
+    const owned = topicId
+      ? await prisma.syllabusSubtopic.findFirst({ where: { id: req.params.subtopicId, topicId }, select: { id: true } })
+      : null;
+    if (!owned) {
+      res.status(404).json({ success: false, error: 'Subtopic not found' });
+      return;
+    }
     const subtopic = await prisma.syllabusSubtopic.update({
-      where: { id: req.params.subtopicId },
+      where: { id: owned.id },
       data: {
         ...(completed !== undefined && { completed }),
         ...(title && { title }),
@@ -201,11 +243,16 @@ export const addTopic = async (req: Request, res: Response): Promise<void> => {
       res.status(400).json({ success: false, error: 'title is required' });
       return;
     }
+    const syllabusId = await findWritableSyllabusId(req, req.params.id);
+    if (!syllabusId) {
+      res.status(404).json({ success: false, error: 'Syllabus not found' });
+      return;
+    }
     // Determine next order
-    const count = await prisma.syllabusTopic.count({ where: { syllabusId: req.params.id } });
+    const count = await prisma.syllabusTopic.count({ where: { syllabusId } });
     const topic = await prisma.syllabusTopic.create({
       data: {
-        syllabusId: req.params.id,
+        syllabusId,
         title,
         description: description || null,
         duration: duration || 60,

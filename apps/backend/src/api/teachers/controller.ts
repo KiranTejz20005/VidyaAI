@@ -3,7 +3,7 @@ import prisma from '../../config/prisma';
 import { logger } from '../../utils/logger';
 import { sendSuccess, sendError, sendNotFound } from '../common/response';
 import { parsePagination, buildPagination } from '../common/pagination';
-import { requireRequestOrgId } from '../../security/request-context';
+import { requireRequestOrgId, orgScope } from '../../security/request-context';
 import { idParamSchema } from './validators';
 import {
   serializeTeacher,
@@ -11,6 +11,14 @@ import {
   serializeTeacherClass,
   serializeTeacherPerformance,
 } from './serializers';
+
+/** Upper bound for per-teacher assignment lists. */
+const MAX_TEACHER_ASSIGNMENTS = 100;
+
+/** Teacher lookup confined to the caller's tenant. */
+function teacherInOrgWhere(req: Request, id: string) {
+  return { id, role: 'TEACHER' as const, ...orgScope(req) };
+}
 
 export const listTeachers = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -81,11 +89,11 @@ export const listTeachers = async (req: Request, res: Response): Promise<void> =
 export const getTeacher = async (req: Request, res: Response): Promise<void> => {
   try {
     const { params } = idParamSchema.parse({ params: req.params });
-    const user = await prisma.user.findUnique({
-      where: { id: params.id },
+    const user = await prisma.user.findFirst({
+      where: teacherInOrgWhere(req, params.id),
       include: { department: { select: { name: true } } },
     });
-    if (!user || user.role !== 'TEACHER') {
+    if (!user) {
       sendNotFound(res, 'Teacher not found');
       return;
     }
@@ -117,18 +125,19 @@ export const getTeacher = async (req: Request, res: Response): Promise<void> => 
 export const getTeacherAssignments = async (req: Request, res: Response): Promise<void> => {
   try {
     const { params } = idParamSchema.parse({ params: req.params });
-    const user = await prisma.user.findUnique({ where: { id: params.id } });
-    if (!user || user.role !== 'TEACHER') {
+    const user = await prisma.user.findFirst({ where: teacherInOrgWhere(req, params.id), select: { id: true } });
+    if (!user) {
       sendNotFound(res, 'Teacher not found');
       return;
     }
 
     const assignments = await prisma.assignment.findMany({
-      where: { createdById: params.id },
+      where: { createdById: params.id, ...orgScope(req) },
       include: {
         _count: { select: { submissions: true } },
       },
       orderBy: { createdAt: 'desc' },
+      take: MAX_TEACHER_ASSIGNMENTS,
     });
 
     const data = await Promise.all(
@@ -160,14 +169,14 @@ export const getTeacherAssignments = async (req: Request, res: Response): Promis
 export const getTeacherClasses = async (req: Request, res: Response): Promise<void> => {
   try {
     const { params } = idParamSchema.parse({ params: req.params });
-    const user = await prisma.user.findUnique({ where: { id: params.id } });
-    if (!user || user.role !== 'TEACHER') {
+    const user = await prisma.user.findFirst({ where: teacherInOrgWhere(req, params.id), select: { id: true } });
+    if (!user) {
       sendNotFound(res, 'Teacher not found');
       return;
     }
 
     const classes = await prisma.classGroup.findMany({
-      where: { userId: params.id },
+      where: { userId: params.id, ...orgScope(req) },
       include: {
         _count: { select: { students: true } },
       },
@@ -186,18 +195,18 @@ export const getTeacherClasses = async (req: Request, res: Response): Promise<vo
 export const getTeacherPerformance = async (req: Request, res: Response): Promise<void> => {
   try {
     const { params } = idParamSchema.parse({ params: req.params });
-    const user = await prisma.user.findUnique({ where: { id: params.id } });
-    if (!user || user.role !== 'TEACHER') {
+    const user = await prisma.user.findFirst({ where: teacherInOrgWhere(req, params.id), select: { id: true } });
+    if (!user) {
       sendNotFound(res, 'Teacher not found');
       return;
     }
 
     const [totalAssignments, activeClasses, evaluations] = await Promise.all([
-      prisma.assignment.count({ where: { createdById: params.id } }),
-      prisma.classGroup.count({ where: { userId: params.id } }),
+      prisma.assignment.count({ where: { createdById: params.id, ...orgScope(req) } }),
+      prisma.classGroup.count({ where: { userId: params.id, ...orgScope(req) } }),
       prisma.submissionEvaluation.findMany({
         where: {
-          submission: { assignment: { createdById: params.id } },
+          submission: { assignment: { createdById: params.id, ...orgScope(req) } },
         },
         select: { score: true, totalMarks: true, createdAt: true },
       }),
@@ -209,7 +218,7 @@ export const getTeacherPerformance = async (req: Request, res: Response): Promis
 
     const gradedCount = evaluations.length;
     const totalSubmissions = await prisma.studentSubmission.count({
-      where: { assignment: { createdById: params.id } },
+      where: { assignment: { createdById: params.id, ...orgScope(req) } },
     });
     const gradingCompletionRate = totalSubmissions > 0 ? Math.round((gradedCount / totalSubmissions) * 100) : 0;
 
@@ -217,6 +226,7 @@ export const getTeacherPerformance = async (req: Request, res: Response): Promis
       where: {
         group: {
           userId: params.id,
+          ...orgScope(req),
         },
       } as any,
     });

@@ -2,11 +2,31 @@ import { Request, Response } from 'express';
 import { sendSuccess, sendCreated, sendNoContent } from '../common/response';
 import { ApiError } from '../common/errors';
 import { parsePagination, buildPagination } from '../common/pagination';
-import { getRequestUserId, requireRequestOrgId } from '../../security/request-context';
+import { getRequestUserId, requireRequestOrgId, orgScope } from '../../security/request-context';
 import { RubricService } from '../../services/rubric.service';
 import { RubricParserService } from '../../services/rubric-parser.service';
 import prisma from '../../config/prisma';
 import { serializeRubric, serializeRubricExport } from './serializers';
+
+/** Rubric header fields a client may change; everything else is server-managed. */
+const UPDATABLE_RUBRIC_FIELDS = [
+  'title',
+  'description',
+  'department',
+  'course',
+  'subject',
+  'chapter',
+  'topic',
+  'difficulty',
+  'language',
+  'status',
+] as const;
+
+/** Throws 404 unless the rubric exists inside the caller's tenant. */
+async function assertRubricInOrg(req: Request, id: string): Promise<void> {
+  const existing = await prisma.rubric.findFirst({ where: { id, ...orgScope(req) }, select: { id: true } });
+  if (!existing) throw ApiError.notFound('Rubric not found');
+}
 
 export const listRubrics = async (req: Request, res: Response): Promise<void> => {
   const { page, limit, sort, order, search } = parsePagination(req);
@@ -93,6 +113,7 @@ export const createRubric = async (req: Request, res: Response): Promise<void> =
 
 export const getRubric = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
+  await assertRubricInOrg(req, id);
   const rubric = await RubricService.getRubricWithCriteria(id);
 
   if (!rubric) {
@@ -105,10 +126,13 @@ export const getRubric = async (req: Request, res: Response): Promise<void> => {
 export const updateRubric = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
 
-  const existing = await prisma.rubric.findUnique({ where: { id } });
-  if (!existing) throw ApiError.notFound('Rubric not found');
+  await assertRubricInOrg(req, id);
 
-  const { criteria, ...rubricFields } = req.body;
+  const { criteria } = req.body;
+  const rubricFields: Record<string, unknown> = {};
+  for (const field of UPDATABLE_RUBRIC_FIELDS) {
+    if (req.body[field] !== undefined) rubricFields[field] = req.body[field];
+  }
 
   if (criteria) {
     await prisma.rubricCriterion.deleteMany({ where: { rubricId: id, parentId: null } });
@@ -159,8 +183,7 @@ export const updateRubric = async (req: Request, res: Response): Promise<void> =
 export const deleteRubric = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
 
-  const existing = await prisma.rubric.findUnique({ where: { id } });
-  if (!existing) throw ApiError.notFound('Rubric not found');
+  await assertRubricInOrg(req, id);
 
   await prisma.rubricCriterion.deleteMany({ where: { rubricId: id } });
   await prisma.rubric.delete({ where: { id } });
@@ -172,8 +195,7 @@ export const duplicateRubric = async (req: Request, res: Response): Promise<void
   const { id } = req.params;
   const userId = getRequestUserId(req);
 
-  const existing = await RubricService.getRubricWithCriteria(id);
-  if (!existing) throw ApiError.notFound('Rubric not found');
+  await assertRubricInOrg(req, id);
 
   const newVersion = await RubricService.createNewVersion(id, userId);
 
@@ -184,6 +206,7 @@ export const duplicateRubric = async (req: Request, res: Response): Promise<void
 export const exportRubric = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
 
+  await assertRubricInOrg(req, id);
   const rubric = await RubricService.getRubricWithCriteria(id);
   if (!rubric) throw ApiError.notFound('Rubric not found');
 

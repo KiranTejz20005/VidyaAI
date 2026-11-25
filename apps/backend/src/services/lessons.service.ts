@@ -20,6 +20,7 @@ export interface LessonCreateInput {
   duration: 'DAILY' | 'WEEKLY' | 'MONTHLY';
   objectives: string;
   userId: string;
+  organizationId?: string | null;
 }
 
 export const createLessonPlan = async (input: LessonCreateInput) => {
@@ -94,6 +95,7 @@ ${input.objectives}
       assessments: assessmentsVal,
       content: contentVal,
       userId: input.userId,
+      organizationId: input.organizationId ?? null,
     },
   });
 
@@ -107,14 +109,17 @@ export const listUserLessonPlans = async (userId: string) => {
   });
 };
 
-export const getLessonPlanDetails = async (id: string) => {
-  return prisma.lessonPlan.findUnique({
-    where: { id },
+/** Returns the plan only when it belongs to `userId`. */
+export const getLessonPlanDetails = async (id: string, userId: string) => {
+  return prisma.lessonPlan.findFirst({
+    where: { id, userId },
   });
 };
 
-export const deleteLessonPlan = async (id: string) => {
-  return prisma.lessonPlan.delete({
-    where: { id },
+/** Deletes the plan only when it belongs to `userId`; returns whether a row was removed. */
+export const deleteLessonPlan = async (id: string, userId: string): Promise<boolean> => {
+  const { count } = await prisma.lessonPlan.deleteMany({
+    where: { id, userId },
   });
+  return count > 0;
 };

@@ -2,12 +2,13 @@ import OpenAI from 'openai';
 import { AIProvider } from './provider.interface';
 import { env } from '../../../config/env';
 import { logger } from '../../../utils/logger';
+import { PROVIDER_SDK_CLIENT_OPTIONS, providerSignal } from '../request-signal';
 
 export class OpenAIProvider implements AIProvider {
   private client: OpenAI;
 
   constructor() {
-    this.client = new OpenAI({ apiKey: env.OPENAI_API_KEY || '' });
+    this.client = new OpenAI({ apiKey: env.OPENAI_API_KEY || '', ...PROVIDER_SDK_CLIENT_OPTIONS });
   }
 
   async generate(prompt: string, options?: any, signal?: AbortSignal): Promise<any> {
@@ -32,7 +33,7 @@ export class OpenAIProvider implements AIProvider {
       messages,
       temperature: options?.temperature || 0.7,
       response_format: options?.responseFormat,
-    }, { signal });
+    }, { signal: providerSignal(signal) });
     return response.choices[0].message.content;
   }
 
@@ -45,7 +46,7 @@ export class OpenAIProvider implements AIProvider {
         stream: true,
         temperature: options?.temperature || 0.7,
       },
-      { signal: options?.signal }
+      { signal: providerSignal(options?.signal) }
     );
 
     for await (const chunk of stream) {

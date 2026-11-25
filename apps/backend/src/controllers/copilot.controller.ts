@@ -2,6 +2,26 @@ import { Request, Response } from 'express';
 import { TeacherCopilotService } from '../services/teacher-copilot.service';
 import { sendSuccess, sendError } from '../utils/api-response.util';
 import prisma from '../config/prisma';
+import {
+  getRequestOrgId,
+  getRequestUserId,
+  isAdminRole,
+  isSuperAdmin,
+  orgScope,
+} from '../security/request-context';
+
+/**
+ * Whether the caller may modify a record owned by `ownerId` in `recordOrgId`:
+ * the owner always may; an org admin only inside their own organization.
+ */
+function canManageOwnedRecord(req: Request, ownerId: string | null | undefined, recordOrgId: string | null | undefined): boolean {
+  const userId = getRequestUserId(req);
+  if (ownerId && ownerId === userId) return true;
+  if (isSuperAdmin(req.user?.role)) return true;
+  if (!isAdminRole(req.user?.role)) return false;
+  const orgId = getRequestOrgId(req);
+  return Boolean(orgId && recordOrgId && recordOrgId === orgId);
+}
 
 /**
  * POST /v1/copilot/lesson-plan
@@ -9,8 +29,8 @@ import prisma from '../config/prisma';
  */
 export const generateLessonPlan = async (req: Request, res: Response): Promise<void> => {
   const { subject, topic, duration, learningOutcomes } = req.body;
-  const userId = req.user?.id ?? 'demo-faculty-id';
-  const organizationId = req.user?.activeOrganizationId ?? req.user?.organizationId ?? '';
+  const userId = getRequestUserId(req);
+  const organizationId = getRequestOrgId(req) ?? '';
 
   if (!subject || !topic || !duration) {
     sendError(res, 400, 'subject, topic, and duration are required', { errorCode: 'VALIDATION_ERROR' });
@@ -34,8 +54,8 @@ export const generateLessonPlan = async (req: Request, res: Response): Promise<v
  * Retrieves a list of generated lesson plans.
  */
 export const getLessonPlans = async (req: Request, res: Response): Promise<void> => {
-  const userId = req.user?.id ?? 'demo-faculty-id';
-  const organizationId = req.user?.activeOrganizationId ?? req.user?.organizationId ?? '';
+  const userId = getRequestUserId(req);
+  const organizationId = getRequestOrgId(req) ?? '';
 
   const plans = await prisma.lessonPlan.findMany({
     where: { userId, organizationId: organizationId || undefined },
@@ -52,7 +72,7 @@ export const getLessonPlans = async (req: Request, res: Response): Promise<void>
  */
 export const deleteLessonPlan = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
-  const userId = req.user?.id ?? 'demo-faculty-id';
+  const userId = getRequestUserId(req);
   
   if (!id) {
     sendError(res, 400, 'Lesson plan ID is required', { errorCode: 'VALIDATION_ERROR' });
@@ -82,7 +102,7 @@ export const deleteLessonPlan = async (req: Request, res: Response): Promise<voi
  */
 export const updateLessonPlan = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
-  const userId = req.user?.id ?? 'demo-faculty-id';
+  const userId = getRequestUserId(req);
   
   if (!id) {
     sendError(res, 400, 'Lesson plan ID is required', { errorCode: 'VALIDATION_ERROR' });
@@ -126,8 +146,8 @@ export const updateLessonPlan = async (req: Request, res: Response): Promise<voi
  */
 export const executeWorkflow = async (req: Request, res: Response): Promise<void> => {
   const { workflowName, tasks } = req.body;
-  const userId = req.user?.id ?? 'demo-faculty-id';
-  const organizationId = req.user?.activeOrganizationId ?? req.user?.organizationId ?? '';
+  const userId = getRequestUserId(req);
+  const organizationId = getRequestOrgId(req) ?? '';
 
   if (!workflowName || !Array.isArray(tasks) || tasks.length === 0) {
     sendError(res, 400, 'workflowName and tasks[] are required', { errorCode: 'VALIDATION_ERROR' });
@@ -149,8 +169,8 @@ export const executeWorkflow = async (req: Request, res: Response): Promise<void
  * Lists automation workflows for the authenticated user.
  */
 export const listWorkflows = async (req: Request, res: Response): Promise<void> => {
-  const userId = req.user?.id ?? '';
-  const organizationId = req.user?.activeOrganizationId ?? req.user?.organizationId ?? '';
+  const userId = getRequestUserId(req);
+  const organizationId = getRequestOrgId(req) ?? '';
 
   const workflows = await prisma.copilotWorkflow.findMany({
     where: { userId, organizationId: organizationId || undefined },
@@ -189,8 +209,8 @@ export const analyzeOBE = async (req: Request, res: Response): Promise<void> => 
  */
 export const generateTestPaper = async (req: Request, res: Response): Promise<void> => {
   const { subject, topic, grade, duration, totalMarks, difficulty, customInstructions } = req.body;
-  const userId = req.user?.id ?? 'demo-faculty-id';
-  const organizationId = req.user?.activeOrganizationId ?? req.user?.organizationId ?? '';
+  const userId = getRequestUserId(req);
+  const organizationId = getRequestOrgId(req) ?? '';
 
   if (!subject || !topic) {
     sendError(res, 400, 'subject and topic are required', { errorCode: 'VALIDATION_ERROR' });
@@ -215,7 +235,7 @@ export const generateTestPaper = async (req: Request, res: Response): Promise<vo
  * Retrieves all generated test papers.
  */
 export const getTestPapers = async (req: Request, res: Response): Promise<void> => {
-  const organizationId = req.user?.activeOrganizationId ?? req.user?.organizationId ?? '';
+  const organizationId = getRequestOrgId(req) ?? '';
 
   const where: any = {};
   if (organizationId) {

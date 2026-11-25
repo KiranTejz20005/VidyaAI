@@ -3,7 +3,8 @@ import prisma from '../../config/prisma';
 import { logger } from '../../utils/logger';
 import { sendSuccess, sendError, sendNotFound } from '../common/response';
 import { parsePagination, buildPagination } from '../common/pagination';
-import { requireRequestOrgId } from '../../security/request-context';
+import type { Student } from '@prisma/client';
+import { requireRequestOrgId, orgScope } from '../../security/request-context';
 import { idParamSchema } from './validators';
 import {
   serializeStudent,
@@ -14,6 +15,32 @@ import {
   serializeLearningProfile,
   serializeAtRisk,
 } from './serializers';
+
+/** Upper bound for per-student history lists. */
+const MAX_HISTORY_ITEMS = 100;
+
+/** Loads a Student row only when its class group belongs to the caller's tenant. */
+async function findStudentInOrg(req: Request, id: string): Promise<Student | null> {
+  return prisma.student.findFirst({ where: { id, group: { ...orgScope(req) } } });
+}
+
+/**
+ * Submissions and quiz sessions are keyed by the student's User id, while the
+ * roster row is keyed by its own id. Resolve the account through the roster
+ * email inside the same tenant.
+ */
+async function resolveStudentUserId(req: Request, student: Student): Promise<string | null> {
+  const user = await prisma.user.findFirst({
+    where: { email: student.email, ...orgScope(req) },
+    select: { id: true },
+  });
+  return user?.id ?? null;
+}
+
+/** Submission filter for one student's account inside the caller's tenant (matches nothing without an account). */
+function submissionsOf(req: Request, studentUserId: string | null) {
+  return { studentId: { in: studentUserId ? [studentUserId] : [] }, ...orgScope(req) };
+}
 
 export const listStudents = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -63,8 +90,8 @@ export const listStudents = async (req: Request, res: Response): Promise<void> =
 export const getStudent = async (req: Request, res: Response): Promise<void> => {
   try {
     const { params } = idParamSchema.parse({ params: req.params });
-    const student = await (prisma as any).student.findUnique({
-      where: { id: params.id },
+    const student = await (prisma as any).student.findFirst({
+      where: { id: params.id, group: { ...orgScope(req) } },
       include: {
         user: { select: { firstName: true, lastName: true, email: true, avatar: true } },
         group: { select: { name: true } },
@@ -84,21 +111,22 @@ export const getStudent = async (req: Request, res: Response): Promise<void> => 
 export const getStudentProgress = async (req: Request, res: Response): Promise<void> => {
   try {
     const { params } = idParamSchema.parse({ params: req.params });
-    const student = await prisma.student.findUnique({ where: { id: params.id } });
+    const student = await findStudentInOrg(req, params.id);
     if (!student) {
       sendNotFound(res, 'Student not found');
       return;
     }
+    const studentUserId = await resolveStudentUserId(req, student);
 
     const [completedAssignments, totalAssignments, submissions] = await Promise.all([
       prisma.studentSubmission.count({
-        where: { studentId: params.id, status: 'GRADED' as any },
+        where: { ...submissionsOf(req, studentUserId), status: 'GRADED' as any },
       }),
       prisma.studentSubmission.count({
-        where: { studentId: params.id },
+        where: submissionsOf(req, studentUserId),
       }),
       prisma.studentSubmission.findMany({
-        where: { studentId: params.id },
+        where: submissionsOf(req, studentUserId),
         select: { id: true, status: true, createdAt: true },
         orderBy: { createdAt: 'desc' },
         take: 10,
@@ -132,16 +160,18 @@ export const getStudentProgress = async (req: Request, res: Response): Promise<v
 export const getStudentPerformance = async (req: Request, res: Response): Promise<void> => {
   try {
     const { params } = idParamSchema.parse({ params: req.params });
-    const student = await prisma.student.findUnique({ where: { id: params.id } });
+    const student = await findStudentInOrg(req, params.id);
     if (!student) {
       sendNotFound(res, 'Student not found');
       return;
     }
+    const studentUserId = await resolveStudentUserId(req, student);
 
     const submissionsWithScore = await prisma.submissionEvaluation.findMany({
-      where: { submission: { studentId: params.id } },
+      where: { submission: submissionsOf(req, studentUserId) },
       select: { score: true, totalMarks: true, submission: { select: { assignmentId: true, assignment: { select: { title: true, subject: true } } } } },
       orderBy: { createdAt: 'desc' },
+      take: MAX_HISTORY_ITEMS,
     });
 
     const avgScore = submissionsWithScore.length > 0
@@ -188,15 +218,17 @@ export const getStudentPerformance = async (req: Request, res: Response): Promis
 export const getStudentQuizzes = async (req: Request, res: Response): Promise<void> => {
   try {
     const { params } = idParamSchema.parse({ params: req.params });
-    const student = await prisma.student.findUnique({ where: { id: params.id } });
+    const student = await findStudentInOrg(req, params.id);
     if (!student) {
       sendNotFound(res, 'Student not found');
       return;
     }
+    const studentUserId = await resolveStudentUserId(req, student);
 
     const quizSessions = await prisma.quizSession.findMany({
-      where: { userId: params.id },
+      where: { userId: { in: studentUserId ? [studentUserId] : [] } },
       orderBy: { createdAt: 'desc' },
+      take: MAX_HISTORY_ITEMS,
     });
 
     sendSuccess(res, {
@@ -222,16 +254,18 @@ export const getStudentQuizzes = async (req: Request, res: Response): Promise<vo
 export const getStudentSubmissions = async (req: Request, res: Response): Promise<void> => {
   try {
     const { params } = idParamSchema.parse({ params: req.params });
-    const student = await prisma.student.findUnique({ where: { id: params.id } });
+    const student = await findStudentInOrg(req, params.id);
     if (!student) {
       sendNotFound(res, 'Student not found');
       return;
     }
+    const studentUserId = await resolveStudentUserId(req, student);
 
     const submissions = await prisma.studentSubmission.findMany({
-      where: { studentId: params.id },
+      where: submissionsOf(req, studentUserId),
       include: { assignment: { select: { title: true } } },
       orderBy: { createdAt: 'desc' },
+      take: MAX_HISTORY_ITEMS,
     });
 
     sendSuccess(res, {
@@ -257,7 +291,7 @@ export const getStudentSubmissions = async (req: Request, res: Response): Promis
 export const getStudentLearningProfile = async (req: Request, res: Response): Promise<void> => {
   try {
     const { params } = idParamSchema.parse({ params: req.params });
-    const student = await prisma.student.findUnique({ where: { id: params.id } });
+    const student = await findStudentInOrg(req, params.id);
     if (!student) {
       sendNotFound(res, 'Student not found');
       return;
@@ -290,21 +324,24 @@ export const getStudentLearningProfile = async (req: Request, res: Response): Pr
 export const getStudentAtRisk = async (req: Request, res: Response): Promise<void> => {
   try {
     const { params } = idParamSchema.parse({ params: req.params });
-    const student = await prisma.student.findUnique({ where: { id: params.id } });
+    const student = await findStudentInOrg(req, params.id);
     if (!student) {
       sendNotFound(res, 'Student not found');
       return;
     }
+    const studentUserId = await resolveStudentUserId(req, student);
 
     const submissions = await prisma.studentSubmission.findMany({
-      where: { studentId: params.id },
+      where: submissionsOf(req, studentUserId),
       orderBy: { createdAt: 'desc' },
       take: 20,
     });
 
     const evaluations = await prisma.submissionEvaluation.findMany({
-      where: { submission: { studentId: params.id } },
+      where: { submission: submissionsOf(req, studentUserId) },
       select: { score: true, totalMarks: true, submissionId: true },
+      orderBy: { createdAt: 'desc' },
+      take: MAX_HISTORY_ITEMS,
     });
 
     const evaluatedSubmissionIds = new Set(evaluations.map((e) => e.submissionId));

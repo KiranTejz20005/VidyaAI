@@ -29,7 +29,7 @@ export const getAssessments = async (req: Request, res: Response) => {
     const limit = parseInt(req.query.limit as string) || 50;
     const skip = parseInt(req.query.skip as string) || 0;
     const subjectId = req.query.subject as string;
-    const organizationId = req.body._requireOrganizationScope || req.user?.organizationId;
+    const organizationId = req.authScope?.organizationId || req.user?.organizationId;
 
     const whereClause: any = {};
     if (subjectId) whereClause.subjectId = subjectId;

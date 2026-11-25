@@ -58,27 +58,4 @@ export const analyticsPaths = {
       responses: { '200': { description: 'AI usage stats' } },
     },
   },
-  '/analytics/trends': {
-    get: {
-      tags: ['Analytics'],
-      summary: 'Get trend data over time',
-      security: [{ bearerAuth: [] }],
-      parameters: [
-        { in: 'query', name: 'metric', schema: { type: 'string' } },
-        { in: 'query', name: 'period', schema: { type: 'string', enum: ['7d', '30d', '90d', '1y'] } },
-      ],
-      responses: { '200': { description: 'Trend data' } },
-    },
-  },
-  '/analytics/export/{type}': {
-    get: {
-      tags: ['Analytics'],
-      summary: 'Export analytics data (CSV/JSON)',
-      security: [{ bearerAuth: [] }],
-      parameters: [
-        { in: 'path', name: 'type', required: true, schema: { type: 'string', enum: ['csv', 'json'] } },
-      ],
-      responses: { '200': { description: 'Exported data' } },
-    },
-  },
 };

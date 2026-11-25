@@ -52,10 +52,3 @@ export interface AiUsageStatsDto {
   providerUsage: Record<string, { tokens: number; cost: number }>;
   topModels: Array<{ model: string; usage: number }>;
 }
-
-export interface TrendDataDto {
-  labels: string[];
-  values: number[];
-  metric: string;
-  period: string;
-}

@@ -1,6 +1,7 @@
 import { AIProvider } from './provider.interface';
 import { env } from '../../../config/env';
 import { logger } from '../../../utils/logger';
+import { providerSignal } from '../request-signal';
 
 /** Gemini adapter used by the active AI orchestrator for paper/OCR/grading work. */
 export class GeminiProvider implements AIProvider {
@@ -15,10 +16,11 @@ export class GeminiProvider implements AIProvider {
       if (match) parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
     }
 
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`, {
+    // API key goes in a header, never the URL (URLs end up in proxy/access logs and error messages).
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal,
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
+      signal: providerSignal(signal),
       body: JSON.stringify({
         contents: [{ role: 'user', parts }],
         generationConfig: {
@@ -38,7 +40,7 @@ export class GeminiProvider implements AIProvider {
   }
 
   async *stream(prompt: string, options?: any): AsyncIterable<string> {
-    yield await this.generate(prompt, options);
+    yield await this.generate(prompt, options, options?.signal);
   }
 
   async countTokens(text: string): Promise<number> { return Math.ceil(text.length / 4); }
@@ -51,7 +53,10 @@ export class GeminiProvider implements AIProvider {
   async healthCheck(): Promise<boolean> {
     try {
       if (!env.GEMINI_API_KEY) return false;
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${this.model}?key=${encodeURIComponent(env.GEMINI_API_KEY)}`);
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${this.model}`, {
+        headers: { 'x-goog-api-key': env.GEMINI_API_KEY },
+        signal: providerSignal(undefined, 10_000),
+      });
       return response.ok;
     } catch (error) {
       logger.warn({ error }, 'Gemini health check failed');

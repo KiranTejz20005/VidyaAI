@@ -273,7 +273,7 @@ export async function getAssignmentHandler(req: Request, res: Response): Promise
     await assertCanViewAssignment(req, assignment);
     
     // Only enforce faculty ownership rules if the user is acting as a faculty member
-    if (req.body._requireOwnership && isFacultyRole(req.user?.role)) {
+    if (req.authScope?.requireOwnership && isFacultyRole(req.user?.role)) {
       assertFacultyOwnsAssignment(req, assignment);
     }
   const [job, paper, studentSubmission] = await Promise.all([

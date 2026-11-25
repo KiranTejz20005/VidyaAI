@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { jsonrepair } from 'jsonrepair';
+import { safeJsonRepairParse } from '../utils/safe-json';
 import { generatedPaperSchema, type ValidatedPaper } from '../validators/paper.validator';
 import { validateSingleQuestion } from '../validators/per-question-validator';
 
@@ -45,8 +45,7 @@ function parseStrictJson(raw: string): unknown {
     throw new PaperParseError('AI output is empty', raw, true);
   }
 
-  const repaired = jsonrepair(cleaned);
-  return JSON.parse(repaired) as unknown;
+  return safeJsonRepairParse(cleaned).value;
 }
 
 function unwrapEnvelope(parsed: unknown): Record<string, unknown> {

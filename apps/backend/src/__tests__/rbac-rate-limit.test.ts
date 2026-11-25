@@ -55,20 +55,20 @@ describe('Multi-Tenant RBAC Security & Rate Limiting Integration (VID-10)', () =
       expect(effectiveOrgId).not.toBe('org-beta');
     });
 
-    it('should allow SUPER_ADMIN to target specific active organization scope', () => {
+    it('lets a SUPER_ADMIN target an organization only through the verified token claim', () => {
       const mockReq = {
-        user: {
-          id: 'user-super-admin',
-          role: 'SUPER_ADMIN',
-          organizationId: 'org-alpha',
-        },
-        body: {
-          _requireOrganizationScope: 'org-beta',
-        },
+        user: { id: 'user-super-admin', role: 'SUPER_ADMIN', organizationId: 'org-alpha', activeOrganizationId: 'org-beta' },
+        body: {},
       } as unknown as Request;
+      expect(getRequestOrgId(mockReq)).toBe('org-beta');
+    });
 
-      const effectiveOrgId = getRequestOrgId(mockReq);
-      expect(effectiveOrgId).toBe('org-beta');
+    it('ignores a client-supplied organization override in the request body', () => {
+      const mockReq = {
+        user: { id: 'user-super-admin', role: 'SUPER_ADMIN', organizationId: 'org-alpha' },
+        body: { _requireOrganizationScope: 'org-beta', organizationId: 'org-beta' },
+      } as unknown as Request;
+      expect(getRequestOrgId(mockReq)).toBe('org-alpha');
     });
 
     it('should throw AccessDeniedError (403) when user attempts to access cross-tenant submission', async () => {

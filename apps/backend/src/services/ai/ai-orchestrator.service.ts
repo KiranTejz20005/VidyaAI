@@ -10,6 +10,7 @@ import { ProviderHealthManager } from './provider-health';
 import { withTimeout, createTimeoutSignal } from '../../utils/timeout';
 import { logger } from '../../utils/logger';
 import { env } from '../../config/env';
+import { assertJsonInputSize, safeJsonParse, safeJsonRepairParse } from '../../utils/safe-json';
 
 export interface AIRequestOptions {
   intent: string;
@@ -156,6 +157,7 @@ export class AIOrchestrator {
             try {
               let cleanResult = result;
               if (typeof result === 'string') {
+                assertJsonInputSize(result);
                 cleanResult = result.replace(/```json/gi, '').replace(/```/g, '').trim();
                 const match = cleanResult.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
                 if (match) {
@@ -164,11 +166,9 @@ export class AIOrchestrator {
               }
               let parsed: any;
               try {
-                parsed = JSON.parse(cleanResult);
+                parsed = safeJsonParse(cleanResult);
               } catch {
-                const { jsonrepair } = await import('jsonrepair');
-                const repaired = jsonrepair(cleanResult);
-                parsed = JSON.parse(repaired);
+                parsed = safeJsonRepairParse(cleanResult).value;
               }
               if (parsed && typeof parsed === 'object') {
                 if (parsed.paper && typeof parsed.paper === 'object') parsed = parsed.paper;
@@ -177,7 +177,10 @@ export class AIOrchestrator {
               }
               return parsed;
             } catch (e) {
-              logger.error({ result }, `Failed to parse AI response as JSON from ${providerName}`);
+              logger.error(
+                { err: e, resultLength: typeof result === 'string' ? result.length : undefined },
+                `Failed to parse AI response as JSON from ${providerName}`
+              );
               this.health.recordValidationFailure(providerName);
               lastError = new Error(`AI Response Validation Failed (${providerName}): Invalid JSON`);
               continue;
@@ -186,6 +189,9 @@ export class AIOrchestrator {
 
           return result;
         } catch (error) {
+          // Caller cancelled (e.g. client disconnected): stop immediately and do
+          // not penalise the provider's circuit breaker for our own abort.
+          if (options.signal?.aborted) throw error;
           lastError = error as Error;
           const providerDurationMs = Date.now() - providerStartMs;
           const isTimeout =
@@ -253,6 +259,7 @@ export class AIOrchestrator {
     for (const providerName of orderedProviders) {
       const provider = this.providers[providerName];
       if (!provider) continue;
+      if (options.signal?.aborted) throw new Error('AI streaming cancelled');
 
       const isPrimary = providerName === primaryProvider;
       if (!this.health.canAttempt(providerName)) continue;
@@ -279,6 +286,7 @@ export class AIOrchestrator {
         this.health.recordSuccess(providerName, Date.now() - providerStartMs);
         return;
       } catch (error) {
+        if (options.signal?.aborted) throw error;
         lastError = error as Error;
         const isTimeout =
           (error as Error).message?.includes('timed out') ||

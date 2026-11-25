@@ -59,9 +59,10 @@ export const listSessions = async (req: Request, res: Response): Promise<void> =
  */
 export const getSession = async (req: Request, res: Response): Promise<void> => {
   const { sessionId } = req.params;
+  const studentId = getRequestUserId(req);
 
-  const session = await prisma.tutorSession.findUnique({
-    where: { id: sessionId },
+  const session = await prisma.tutorSession.findFirst({
+    where: { id: sessionId, studentId },
     include: { messages: { orderBy: { createdAt: 'asc' } } },
   });
 
@@ -112,6 +113,13 @@ export const chat = async (req: Request, res: Response): Promise<void> => {
  */
 export const closeSession = async (req: Request, res: Response): Promise<void> => {
   const { sessionId } = req.params;
+  const studentId = getRequestUserId(req);
+
+  const owned = await prisma.tutorSession.findFirst({ where: { id: sessionId, studentId }, select: { id: true } });
+  if (!owned) {
+    sendError(res, 404, 'Session not found', { errorCode: 'NOT_FOUND' });
+    return;
+  }
 
   const updated = await prisma.tutorSession.update({
     where: { id: sessionId },
