@@ -1,4 +1,4 @@
-import { Server as SocketIOServer, type Socket } from 'socket.io';
+import { Server as SocketIOServer } from 'socket.io';
 import type { Server as HTTPServer } from 'http';
 import type {
   ServerToClientEvents,
@@ -12,14 +12,13 @@ import { logger } from '../utils/logger';
 // Managers
 import { ConnectionManager } from './managers/ConnectionManager';
 import { RoomManager } from './managers/RoomManager';
-import { PresenceManager, orgRoom } from './managers/PresenceManager';
+import { PresenceManager } from './managers/PresenceManager';
 import { MessageManager } from './managers/MessageManager';
 import { registerTutorSocketHandlers } from './tutor.socket';
 import { createSocketAuthMiddleware } from './socket-auth';
 import { isUuid, SOCKET_LIMITS, TokenBucket } from './socket-guards';
 
 type AppServer = SocketIOServer<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketData>;
-type AppSocket = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketData>;
 
 let io: AppServer | null = null;
 let connectionManager: ConnectionManager | null = null;

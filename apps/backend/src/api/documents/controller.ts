@@ -92,7 +92,7 @@ export async function deleteDocument(req: Request, res: Response): Promise<void>
 export async function processDocument(req: Request, res: Response): Promise<void> {
   const { id } = req.params;
 
-  const document = await findOwnDocument(req, id);
+  await findOwnDocument(req, id);
 
   const job = await ingestionQueue.add('process-document', { documentId: id }, { jobId: `doc-${id}-${Date.now()}` });
 
@@ -107,7 +107,7 @@ export async function processDocument(req: Request, res: Response): Promise<void
 export async function checkDocumentJob(req: Request, res: Response): Promise<void> {
   const { id, jobId } = req.params;
 
-  const document = await findOwnDocument(req, id);
+  await findOwnDocument(req, id);
 
   const job = await ingestionQueue.getJob(jobId);
   if (!job) throw ApiError.notFound('Job not found');

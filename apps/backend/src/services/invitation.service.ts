@@ -49,7 +49,8 @@ export const createInvitation = async ({
     const emailSent = await sendInvitationEmail(email, role, token);
 
     // Never return the stored digest; callers get delivery status instead.
-    const { token: _digest, ...safeInvitation } = invitation;
+    const { token, ...safeInvitation } = invitation;
+    void token;
     return { ...safeInvitation, emailSent };
   } catch (error) {
     logger.error({ err: error }, '[createInvitation] Failed');

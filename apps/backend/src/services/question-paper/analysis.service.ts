@@ -319,7 +319,7 @@ export function buildAnalysisReport(
 
 async function tryAiEnrichment(
   ocrText: string,
-  preferHandwriting: boolean,
+  _preferHandwriting: boolean,
 ): Promise<{ payload: AiPaperQuestionsPayload | null; rejected: boolean }> {
   if (!ocrText.trim() || env.NODE_ENV === 'test') {
     return { payload: null, rejected: false };

@@ -3,7 +3,6 @@ import { cn } from "@/lib/site";
 /** The VidyaAI mascot mark, served from /public/logo.png. */
 export function LogoMark({ className, size = 32 }: { className?: string; size?: number }) {
   return (
-    // eslint-disable-next-line @next/next/no-img-element -- small static brand mark, no optimisation needed
     <img
       src="/logo.png"
       alt=""

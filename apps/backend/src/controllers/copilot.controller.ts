@@ -5,23 +5,7 @@ import prisma from '../config/prisma';
 import {
   getRequestOrgId,
   getRequestUserId,
-  isAdminRole,
-  isSuperAdmin,
-  orgScope,
 } from '../security/request-context';
-
-/**
- * Whether the caller may modify a record owned by `ownerId` in `recordOrgId`:
- * the owner always may; an org admin only inside their own organization.
- */
-function canManageOwnedRecord(req: Request, ownerId: string | null | undefined, recordOrgId: string | null | undefined): boolean {
-  const userId = getRequestUserId(req);
-  if (ownerId && ownerId === userId) return true;
-  if (isSuperAdmin(req.user?.role)) return true;
-  if (!isAdminRole(req.user?.role)) return false;
-  const orgId = getRequestOrgId(req);
-  return Boolean(orgId && recordOrgId && recordOrgId === orgId);
-}
 
 /**
  * POST /v1/copilot/lesson-plan

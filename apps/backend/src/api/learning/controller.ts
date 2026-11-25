@@ -189,7 +189,7 @@ export const getStudyPlans = async (req: Request, res: Response): Promise<void> 
 export const generateStudyPlan = async (req: Request, res: Response): Promise<void> => {
   const { studentId } = req.params;
   await assertStudentAccess(req, studentId);
-  const orgId = requireRequestOrgId(req);
+  requireRequestOrgId(req);
 
   const plan = await LearningIntelligenceService.generateStudyPlan(studentId);
   if (!plan) {

@@ -7,7 +7,6 @@ import {
   updateProfileSchema,
   studentIdParamSchema,
   identifyAtRiskSchema,
-  jobIdParamSchema,
 } from './validators';
 import {
   listProfiles,

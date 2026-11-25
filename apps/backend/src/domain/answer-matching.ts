@@ -24,7 +24,7 @@ export interface SegmentationResult {
 }
 
 // number, optional delimiter, then any number of (a) / a) / (ii) sub-labels
-const HEADER = /^\s*(?:((?:q(?:uestion)?|ans(?:wer)?))\s*\.?\s*)?(\d{1,3})\s*([.):\-]?)\s*((?:\(\s*[a-z]{1,4}\s*\)\s*|[a-z]\s*\)\s*)*)/i;
+const HEADER = /^\s*(?:((?:q(?:uestion)?|ans(?:wer)?))\s*\.?\s*)?(\d{1,3})\s*([.):-]?)\s*((?:\(\s*[a-z]{1,4}\s*\)\s*|[a-z]\s*\)\s*)*)/i;
 const STRUCK = /\[struck\]([\s\S]*?)\[\/struck\]/gi;
 
 function subParts(raw: string): string[] {
