@@ -239,3 +239,86 @@ export interface AddBlueprintItemData {
   itemType?: string;
   topic?: string;
 }
+
+export interface CoPoMatrixResponse {
+  course: {
+    id: string;
+    name: string;
+    code: string;
+    description?: string | null;
+  };
+  cos: Array<{
+    id: string;
+    code: string;
+    description: string;
+    bloomLevel: string;
+  }>;
+  pos: Array<{
+    id: string;
+    code: string;
+    description: string;
+  }>;
+  matrix: MappingMatrixRow[];
+  bloomClassifications: Array<{
+    coId: string;
+    coCode: string;
+    predictedLevel: string;
+    effectiveLevel: string;
+    confidence: number;
+    cues: {
+      verbs: string[];
+      operations: string[];
+      responseType: string;
+    };
+    explanation: string;
+  }>;
+  version?: number;
+}
+
+export interface UpdateCoPoMatrixData {
+  mappings?: Array<{ coId: string; poId: string; weightage: number }>;
+  bloomOverrides?: Array<{ coId: string; bloomLevel: string }>;
+  reason?: string;
+}
+
+export interface GeneratedBlueprintPayload {
+  title: string;
+  totalMarks?: number;
+  examType?: string;
+  units?: unknown[];
+  courseName?: string;
+  courseCode?: string;
+  cos?: unknown[];
+}
+
+export interface GeneratedExamBlueprint {
+  id: string;
+  title: string;
+  examType: string;
+  duration: string;
+  totalMarks: number;
+  difficulty: 'EASY' | 'MODERATE' | 'CHALLENGING' | string;
+  status: string;
+  createdAt: string;
+  sections: Array<{
+    sectionName: string;
+    instructions: string;
+    totalSectionMarks: number;
+    questions: Array<{
+      id: string;
+      qNo: string;
+      questionText: string;
+      coId: string;
+      bloomLevel: string;
+      marks: number;
+      isChoice?: boolean;
+    }>;
+  }>;
+  bloomDistribution: {
+    rememberUnderstand: number;
+    applyAnalyze: number;
+    evaluateCreate: number;
+  };
+  coMarksDistribution: Record<string, number>;
+  validation?: Partial<BlueprintValidation>;
+}

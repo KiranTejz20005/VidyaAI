@@ -27,6 +27,20 @@ import { NbaSarReportModal } from '@/components/obe/NbaSarReportModal';
 import { ExamPaperBlueprintModal, ComprehensiveBlueprint, BlueprintSectionData } from '@/components/obe/ExamPaperBlueprintModal';
 import { SelectDropdown } from '@/components/ui/select-dropdown';
 import { cn } from '@/lib/utils';
+import {
+  getCoPoMatrix,
+  updateCoPoMatrix,
+  listBlueprints,
+  createBlueprint,
+  validateBlueprint,
+  getCoAttainment,
+  getAttainmentDashboard,
+  generateBlueprintQuestions,
+  createCourseOutcome,
+  listPrograms,
+  createProgramOutcome,
+} from '@/services/obe.service';
+import type { Blueprint as ApiBlueprint, CoPoMatrixResponse, CoAttainmentResponse } from '@/types/obe.types';
 
 const BLOOM_LEVELS = ['REMEMBER', 'UNDERSTAND', 'APPLY', 'ANALYZE', 'EVALUATE', 'CREATE'] as const;
 type BloomLevel = typeof BLOOM_LEVELS[number];
@@ -101,6 +115,142 @@ let entityIdCounter = 0;
 function createEntityId(prefix: string): string {
   entityIdCounter += 1;
   return `${prefix}-${entityIdCounter}`;
+}
+
+function mapCoPoMatrixResponse(
+  apiMatrix: CoPoMatrixResponse,
+  courseFallback: { id: string; name: string; code: string }
+): COPOMatrixData {
+  return {
+    course: {
+      id: apiMatrix.course.id,
+      name: apiMatrix.course.name || courseFallback.name,
+      code: apiMatrix.course.code || courseFallback.code,
+      description: apiMatrix.course.description ?? undefined,
+    },
+    cos: apiMatrix.cos.map((co) => ({
+      id: co.id,
+      code: co.code,
+      description: co.description,
+      bloomLevel: co.bloomLevel as BloomLevel,
+    })),
+    pos: apiMatrix.pos,
+    matrix: apiMatrix.matrix.map((row) => ({
+      coId: row.coId,
+      coCode: row.coCode,
+      bloomLevel: row.bloomLevel as BloomLevel,
+      mappings: row.mappings,
+    })),
+    bloomClassifications: (apiMatrix.bloomClassifications ?? []).map((item) => ({
+      ...item,
+      predictedLevel: item.predictedLevel as BloomLevel,
+      effectiveLevel: item.effectiveLevel as BloomLevel,
+    })),
+  };
+}
+
+function mapAttainmentResponse(res: CoAttainmentResponse): AttainmentResult[] {
+  return res.outcomes.map((outcome) => ({
+    coId: outcome.coId,
+    coCode: outcome.coCode,
+    attainment: outcome.attainment,
+    threshold: outcome.threshold,
+    metThreshold: outcome.metThreshold,
+    bloomLevel: outcome.bloomLevel as BloomLevel,
+  }));
+}
+
+function generatedToComprehensiveBlueprint(
+  generated: Awaited<ReturnType<typeof generateBlueprintQuestions>>
+): ComprehensiveBlueprint {
+  return {
+    id: generated.id,
+    title: generated.title,
+    examType: generated.examType,
+    duration: generated.duration,
+    totalMarks: generated.totalMarks,
+    difficulty: (generated.difficulty === 'EASY' || generated.difficulty === 'CHALLENGING'
+      ? generated.difficulty
+      : 'MODERATE') as ComprehensiveBlueprint['difficulty'],
+    status: (['DRAFT', 'PENDING_REVIEW', 'APPROVED'].includes(generated.status)
+      ? generated.status
+      : 'DRAFT') as ComprehensiveBlueprint['status'],
+    createdAt: generated.createdAt,
+    sections: generated.sections.map((section) => ({
+      sectionName: section.sectionName,
+      instructions: section.instructions,
+      totalSectionMarks: section.totalSectionMarks,
+      questions: section.questions.map((question) => ({
+        id: question.id,
+        qNo: question.qNo,
+        questionText: question.questionText,
+        coId: question.coId,
+        bloomLevel: question.bloomLevel as BloomLevel,
+        marks: question.marks,
+        isChoice: question.isChoice,
+      })),
+    })),
+    bloomDistribution: generated.bloomDistribution,
+    coMarksDistribution: generated.coMarksDistribution,
+  };
+}
+
+function apiBlueprintToComprehensive(bp: ApiBlueprint): ComprehensiveBlueprint {
+  const isMid = bp.totalMarks <= 60;
+  const questions = bp.items.map((item, idx) => ({
+    id: item.id,
+    qNo: `Q${idx + 1}`,
+    questionText: item.title,
+    coId: item.coId,
+    bloomLevel: item.bloomLevel as BloomLevel,
+    marks: item.marks,
+  }));
+
+  return {
+    id: bp.id,
+    title: bp.title,
+    examType: isMid ? 'MID_SEM' : 'END_SEM',
+    duration: isMid ? '1.5 Hours' : '3 Hours',
+    totalMarks: bp.totalMarks,
+    difficulty: 'MODERATE',
+    status: (['DRAFT', 'PENDING_REVIEW', 'APPROVED'].includes(bp.status)
+      ? bp.status
+      : 'DRAFT') as ComprehensiveBlueprint['status'],
+    createdAt: bp.createdAt.split('T')[0],
+    sections: [
+      {
+        sectionName: 'Assessment Items',
+        instructions: 'As per stored blueprint specification',
+        totalSectionMarks: bp.totalMarks,
+        questions,
+      },
+    ],
+    bloomDistribution: { rememberUnderstand: 20, applyAnalyze: 50, evaluateCreate: 30 },
+    coMarksDistribution: {},
+  };
+}
+
+function blueprintSectionsToItems(
+  sections: BlueprintSectionData[],
+  cos: CourseOutcomeItem[]
+): Array<{ coId: string; title: string; marks: number; bloomLevel: string; count?: number }> {
+  const coByCode = new Map(cos.map((co) => [co.code.toUpperCase(), co.id]));
+  const coIds = new Set(cos.map((co) => co.id));
+
+  return sections.flatMap((section) =>
+    section.questions.map((question) => {
+      const coId = coIds.has(question.coId)
+        ? question.coId
+        : coByCode.get(question.coId.toUpperCase()) ?? question.coId;
+      return {
+        coId,
+        title: question.questionText,
+        marks: question.marks,
+        bloomLevel: question.bloomLevel,
+        count: 1,
+      };
+    })
+  );
 }
 
 export default function TeacherOBEPage() {
@@ -538,98 +688,120 @@ interface UploadedFileItem {
     []
   );
 
-  // Load Course-Specific Dynamic Data when Course Changes
+  // Load course-scoped OBE data from server when the selected course changes.
   useEffect(() => {
     if (!selectedCourseId) return;
 
     const courseObj = courses.find((c) => c.id === selectedCourseId) || {
       id: selectedCourseId,
       name: 'Curriculum Course',
-      code: 'COURSE101'
+      code: 'COURSE101',
     };
 
-    // Load Syllabus Units from Storage
+    // TODO: Replace with syllabus units API when available.
     const savedUnits = getStorageData<SyllabusUnit[]>(`obe_units_${selectedCourseId}`, []);
     setSyllabusUnits(savedUnits);
 
-    // Load Matrix Data from Storage
-    let savedMatrix = getStorageData<COPOMatrixData>(`obe_matrix_${selectedCourseId}`, {
-      course: { id: courseObj.id, name: courseObj.name, code: courseObj.code },
-      cos: [],
-      pos: [],
-      matrix: [],
-      bloomClassifications: []
-    });
+    let cancelled = false;
 
-    let savedAttainment = getStorageData<AttainmentResult[]>(`obe_attainment_${selectedCourseId}`, []);
+    (async () => {
+      setLoading(true);
+      try {
+        const [matrixResult, blueprintsResult, attainmentResult] = await Promise.allSettled([
+          getCoPoMatrix(selectedCourseId),
+          listBlueprints(selectedCourseId),
+          getAttainmentDashboard(selectedCourseId).catch(() => getCoAttainment(selectedCourseId)),
+        ]);
 
-    // Auto-synthesize COs, POs, Matrix, and Attainment if matrix is empty but units exist!
-    if ((!savedMatrix.cos || savedMatrix.cos.length === 0) && savedUnits.length > 0) {
-      const synthesized = synthesizeFromSyllabus(savedUnits, courseObj);
-      if (synthesized) {
-        savedMatrix = synthesized.fullMatrix;
-        savedAttainment = synthesized.synthesizedAttainment;
-        setStorageData(`obe_matrix_${selectedCourseId}`, savedMatrix);
-        setStorageData(`obe_attainment_${selectedCourseId}`, savedAttainment);
+        if (cancelled) return;
+
+        if (matrixResult.status === 'fulfilled') {
+          const matrix = mapCoPoMatrixResponse(matrixResult.value, courseObj);
+          setMatrixData(matrix);
+          setStorageData(`obe_matrix_${selectedCourseId}`, matrix);
+        } else {
+          setMatrixData({
+            course: { id: courseObj.id, name: courseObj.name, code: courseObj.code },
+            cos: [],
+            pos: [],
+            matrix: [],
+            bloomClassifications: [],
+          });
+        }
+
+        if (blueprintsResult.status === 'fulfilled') {
+          const serverBlueprints = blueprintsResult.value.map(apiBlueprintToComprehensive);
+          setBlueprints(serverBlueprints);
+          if (serverBlueprints.length > 0) {
+            setStorageData(`obe_blueprints_${selectedCourseId}`, serverBlueprints);
+          }
+        } else {
+          setBlueprints([]);
+        }
+
+        if (attainmentResult.status === 'fulfilled') {
+          const attainmentResponse =
+            'course' in attainmentResult.value
+              ? attainmentResult.value.course
+              : attainmentResult.value;
+          const mappedAttainment = mapAttainmentResponse(attainmentResponse);
+          setAttainment(mappedAttainment);
+          setStorageData(`obe_attainment_${selectedCourseId}`, mappedAttainment);
+        } else {
+          setAttainment([]);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-    }
+    })();
 
-    setMatrixData(savedMatrix);
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedCourseId, courses]);
 
-    // Load Comprehensive Blueprints & Flush Stale Legacy Blueprints
-    let savedBlueprints = getStorageData<ComprehensiveBlueprint[]>(`obe_blueprints_${selectedCourseId}`, []);
-
-    const isStaleDsaData = savedBlueprints.some(
-      (b) =>
-        b.sections?.[0]?.questions?.[0]?.questionText?.includes('Asymptotic') &&
-        !courseObj.name.toLowerCase().includes('data structure')
-    );
-
-    // Auto pre-provision standard blueprints if empty, legacy, or stale
-    if (savedBlueprints.length === 0 || !savedBlueprints[0]?.sections || isStaleDsaData) {
-      savedBlueprints = [
-        synthesizeExamBlueprint('Mid-Semester Examination 2026', 50, 'MID_SEM', savedUnits, courseObj),
-        synthesizeExamBlueprint('End-Semester Final Examination 2026', 100, 'END_SEM', savedUnits, courseObj)
-      ];
-      setStorageData(`obe_blueprints_${selectedCourseId}`, savedBlueprints);
-    }
-
-    setBlueprints(savedBlueprints);
-    setAttainment(savedAttainment);
-  }, [selectedCourseId, courses, synthesizeFromSyllabus, synthesizeExamBlueprint]);
-
-  // Save State Modifications to LocalStorage & Backend
-  const saveUnits = (units: SyllabusUnit[]) => {
-    setSyllabusUnits(units);
-    setStorageData(`obe_units_${selectedCourseId}`, units);
-
-    // Auto-update matrix if units were updated
+  const refreshCourseObeData = useCallback(async () => {
+    if (!selectedCourseId) return;
     const courseObj = courses.find((c) => c.id === selectedCourseId) || {
       id: selectedCourseId,
       name: 'Curriculum Course',
-      code: 'COURSE101'
+      code: 'COURSE101',
     };
 
-    if (units.length > 0) {
-      const synthesized = synthesizeFromSyllabus(units, courseObj);
-      if (synthesized) {
-        saveMatrix(synthesized.fullMatrix);
-        setAttainment(synthesized.synthesizedAttainment);
-        setStorageData(`obe_attainment_${selectedCourseId}`, synthesized.synthesizedAttainment);
+    const [matrixResult, blueprintsResult, attainmentResult] = await Promise.allSettled([
+      getCoPoMatrix(selectedCourseId),
+      listBlueprints(selectedCourseId),
+      getAttainmentDashboard(selectedCourseId).catch(() => getCoAttainment(selectedCourseId)),
+    ]);
 
-        // Also refresh blueprints for new units
-        const refreshedBps = [
-          synthesizeExamBlueprint('Mid-Semester Examination 2026', 50, 'MID_SEM', units, courseObj),
-          synthesizeExamBlueprint('End-Semester Final Examination 2026', 100, 'END_SEM', units, courseObj)
-        ];
-        saveBlueprintsList(refreshedBps);
+    if (matrixResult.status === 'fulfilled') {
+      const matrix = mapCoPoMatrixResponse(matrixResult.value, courseObj);
+      setMatrixData(matrix);
+      setStorageData(`obe_matrix_${selectedCourseId}`, matrix);
+    }
+
+    if (blueprintsResult.status === 'fulfilled') {
+      const serverBlueprints = blueprintsResult.value.map(apiBlueprintToComprehensive);
+      setBlueprints(serverBlueprints);
+      if (serverBlueprints.length > 0) {
+        setStorageData(`obe_blueprints_${selectedCourseId}`, serverBlueprints);
       }
     }
-  };
 
-  const saveMatrix = (matrix: COPOMatrixData) => {
-    setMatrixData(matrix);
-    setStorageData(`obe_matrix_${selectedCourseId}`, matrix);
+    if (attainmentResult.status === 'fulfilled') {
+      const attainmentResponse =
+        'course' in attainmentResult.value ? attainmentResult.value.course : attainmentResult.value;
+      const mappedAttainment = mapAttainmentResponse(attainmentResponse);
+      setAttainment(mappedAttainment);
+      setStorageData(`obe_attainment_${selectedCourseId}`, mappedAttainment);
+    }
+  }, [courses, selectedCourseId]);
+
+  // Save units locally until a syllabus API exists.
+  const saveUnits = (units: SyllabusUnit[]) => {
+    setSyllabusUnits(units);
+    // TODO: persist syllabus units via API when available.
+    setStorageData(`obe_units_${selectedCourseId}`, units);
   };
 
   const saveBlueprintsList = (bps: ComprehensiveBlueprint[]) => {
@@ -1334,93 +1506,124 @@ interface UploadedFileItem {
   };
 
   // Add Dynamic Course Outcome (CO)
-  const handleAddCO = () => {
+  const handleAddCO = async () => {
     if (!newCO.code.trim() || !newCO.description.trim()) {
       toast.error('CO Code and Description required');
       return;
     }
 
-    const coItem: CourseOutcomeItem = {
-      id: createEntityId('co'),
-      code: newCO.code.trim().toUpperCase(),
-      description: newCO.description.trim(),
-      bloomLevel: newCO.bloomLevel
-    };
-
-    const newCos = [...matrixData.cos, coItem];
-    const newMatrixRow: MatrixRowItem = {
-      coId: coItem.id,
-      coCode: coItem.code,
-      bloomLevel: coItem.bloomLevel,
-      mappings: matrixData.pos.map((p) => ({ poId: p.id, poCode: p.code, weightage: 2 }))
-    };
-
-    const updatedMatrix: COPOMatrixData = {
-      ...matrixData,
-      cos: newCos,
-      matrix: [...matrixData.matrix, newMatrixRow]
-    };
-
-    saveMatrix(updatedMatrix);
-    setShowAddCOModal(false);
-    setNewCO({ code: '', description: '', bloomLevel: 'UNDERSTAND' });
-    toast.success(`Added ${coItem.code}`);
+    const code = newCO.code.trim().toUpperCase();
+    try {
+      await createCourseOutcome(selectedCourseId, {
+        code,
+        description: newCO.description.trim(),
+        bloomLevel: newCO.bloomLevel,
+      });
+      await refreshCourseObeData();
+      setShowAddCOModal(false);
+      setNewCO({ code: '', description: '', bloomLevel: 'UNDERSTAND' });
+      toast.success(`Added ${code}`);
+    } catch {
+      toast.error('Failed to add course outcome on server.');
+    }
   };
 
   // Add Dynamic Program Outcome (PO)
-  const handleAddPO = () => {
+  const handleAddPO = async () => {
     if (!newPO.code.trim() || !newPO.description.trim()) {
       toast.error('PO Code and Description required');
       return;
     }
 
-    const poItem: ProgramOutcomeItem = {
-      id: createEntityId('po'),
-      code: newPO.code.trim().toUpperCase(),
-      description: newPO.description.trim()
-    };
+    const code = newPO.code.trim().toUpperCase();
+    try {
+      const programs = await listPrograms();
+      const programId = programs[0]?.id;
+      if (!programId) {
+        toast.error('Create an academic program before adding program outcomes.');
+        return;
+      }
 
-    const newPos = [...matrixData.pos, poItem];
-    const updatedRows = matrixData.matrix.map((row) => ({
-      ...row,
-      mappings: [...row.mappings, { poId: poItem.id, poCode: poItem.code, weightage: 0 }]
-    }));
-
-    const updatedMatrix: COPOMatrixData = {
-      ...matrixData,
-      pos: newPos,
-      matrix: updatedRows
-    };
-
-    saveMatrix(updatedMatrix);
-    setShowAddPOModal(false);
-    setNewPO({ code: '', description: '' });
-    toast.success(`Added ${poItem.code}`);
+      await createProgramOutcome(programId, {
+        code,
+        description: newPO.description.trim(),
+      });
+      await refreshCourseObeData();
+      setShowAddPOModal(false);
+      setNewPO({ code: '', description: '' });
+      toast.success(`Added ${code}`);
+    } catch {
+      toast.error('Failed to add program outcome on server.');
+    }
   };
 
   // AI Auto-Fill CO-PO Mappings
-  const handleAutoFillData = () => {
+  const handleAutoFillData = async () => {
     setIsAutoFilling(true);
     toast.loading('⚡ AI Analyzing Syllabus & Generating CO-PO Matrix...', { id: 'autofill' });
 
-    setTimeout(() => {
+    try {
       const courseObj = courses.find((c) => c.id === selectedCourseId) || {
         id: selectedCourseId,
         name: 'Curriculum Course',
-        code: 'COURSE101'
+        code: 'COURSE101',
       };
 
       const synthesized = synthesizeFromSyllabus(syllabusUnits, courseObj);
-      if (synthesized) {
-        saveMatrix(synthesized.fullMatrix);
-        setAttainment(synthesized.synthesizedAttainment);
-        setStorageData(`obe_attainment_${selectedCourseId}`, synthesized.synthesizedAttainment);
-        toast.success('⚡ AI Automatically Created COs, POs, & Filled CO-PO Alignment Matrix!', { id: 'autofill' });
-      } else {
+      if (!synthesized) {
         toast.error('Add syllabus units first or import course topics to auto-fill matrix!', { id: 'autofill' });
+        return;
       }
+
+      for (const co of synthesized.fullMatrix.cos) {
+        try {
+          await createCourseOutcome(selectedCourseId, {
+            code: co.code,
+            description: co.description,
+            bloomLevel: co.bloomLevel,
+          });
+        } catch {
+          /* outcome may already exist */
+        }
+      }
+
+      const freshMatrix = await getCoPoMatrix(selectedCourseId);
+      const coByCode = new Map(freshMatrix.cos.map((co) => [co.code, co.id]));
+      const poByCode = new Map(freshMatrix.pos.map((po) => [po.code, po.id]));
+
+      const mappings = synthesized.fullMatrix.matrix.flatMap((row) =>
+        row.mappings
+          .map((mapping) => {
+            const coId = coByCode.get(row.coCode);
+            const poId = poByCode.get(mapping.poCode);
+            if (!coId || !poId) return null;
+            return { coId, poId, weightage: mapping.weightage };
+          })
+          .filter((item): item is { coId: string; poId: string; weightage: number } => item !== null)
+      );
+
+      const bloomOverrides = synthesized.fullMatrix.cos
+        .map((co) => {
+          const coId = coByCode.get(co.code);
+          return coId ? { coId, bloomLevel: co.bloomLevel } : null;
+        })
+        .filter((item): item is { coId: string; bloomLevel: BloomLevel } => item !== null);
+
+      if (mappings.length > 0) {
+        await updateCoPoMatrix(selectedCourseId, {
+          mappings,
+          bloomOverrides,
+          reason: 'AI syllabus auto-fill',
+        });
+      }
+
+      await refreshCourseObeData();
+      toast.success('⚡ AI Automatically Created COs, POs, & Filled CO-PO Alignment Matrix!', { id: 'autofill' });
+    } catch {
+      toast.error('Failed to auto-fill matrix on server.', { id: 'autofill' });
+    } finally {
       setIsAutoFilling(false);
-    }, 600);
+    }
   };
 
   // AI Regenerate Questions for a specific Blueprint
@@ -1431,31 +1634,28 @@ interface UploadedFileItem {
     toast.loading('⚡ AI Generating High-Quality Exam Blueprint Questions...', { id: 'regen' });
 
     try {
-      const res = await fetch('/api/obe/blueprints/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: target.title,
-          totalMarks: target.totalMarks,
-          examType: target.examType,
-          units: syllabusUnits,
-          cos: matrixData.cos
-        })
+      const courseObj = courses.find((c) => c.id === selectedCourseId);
+      const generated = await generateBlueprintQuestions({
+        title: target.title,
+        totalMarks: target.totalMarks,
+        examType: target.examType,
+        units: syllabusUnits,
+        courseName: courseObj?.name,
+        courseCode: courseObj?.code,
+        cos: matrixData.cos,
       });
-
-      if (res.ok) {
-        const json = await res.json();
-        if (json.data) {
-          const freshBp: ComprehensiveBlueprint = { ...json.data, id: target.id, title: target.title };
-          const updated = blueprints.map((b) => (b.id === bpId ? freshBp : b));
-          saveBlueprintsList(updated);
-          if (selectedBlueprintForModal?.id === bpId) {
-            setSelectedBlueprintForModal(freshBp);
-          }
-          toast.success('⚡ AI Regenerated High-Quality Examination Questions!', { id: 'regen' });
-          return;
-        }
+      const freshBp: ComprehensiveBlueprint = {
+        ...generatedToComprehensiveBlueprint(generated),
+        id: target.id,
+        title: target.title,
+      };
+      const updated = blueprints.map((b) => (b.id === bpId ? freshBp : b));
+      saveBlueprintsList(updated);
+      if (selectedBlueprintForModal?.id === bpId) {
+        setSelectedBlueprintForModal(freshBp);
       }
+      toast.success('⚡ AI Regenerated High-Quality Examination Questions!', { id: 'regen' });
+      return;
     } catch {
       // Graceful fallback to topic-aware synthesizer
     }
@@ -1481,39 +1681,61 @@ interface UploadedFileItem {
     const title = newBlueprint.title.trim();
     toast.loading('⚡ AI Generating High-Quality Exam Blueprint Questions...', { id: 'createbp' });
 
-    let created: ComprehensiveBlueprint | null = null;
+    const courseObj = courses.find((c) => c.id === selectedCourseId);
+    const examType = marks > 60 ? 'END_SEM' : 'MID_SEM';
+
+    let generated: ComprehensiveBlueprint;
     try {
-      const res = await fetch('/api/obe/blueprints/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title,
-          totalMarks: marks,
-          examType: marks > 60 ? 'END_SEM' : 'MID_SEM',
-          units: syllabusUnits,
-          cos: matrixData.cos
-        })
+      const generatedPayload = await generateBlueprintQuestions({
+        title,
+        totalMarks: marks,
+        examType,
+        units: syllabusUnits,
+        courseName: courseObj?.name,
+        courseCode: courseObj?.code,
+        cos: matrixData.cos,
+      });
+      generated = generatedToComprehensiveBlueprint(generatedPayload);
+    } catch {
+      generated = synthesizeExamBlueprint(title, marks, examType, syllabusUnits, courseObj);
+    }
+
+    try {
+      const createdApi = await createBlueprint({
+        courseId: selectedCourseId,
+        title,
+        totalMarks: marks,
+        items: blueprintSectionsToItems(generated.sections, matrixData.cos),
       });
 
-      if (res.ok) {
-        const json = await res.json();
-        if (json.data) {
-          created = json.data;
+      try {
+        const validation = await validateBlueprint(createdApi.id);
+        if (!validation.valid) {
+          toast.error('Blueprint saved, but validation reported issues.');
         }
+      } catch {
+        /* non-blocking validation */
       }
+
+      const persisted: ComprehensiveBlueprint = {
+        ...generated,
+        id: createdApi.id,
+        title: createdApi.title,
+        status: (['DRAFT', 'PENDING_REVIEW', 'APPROVED'].includes(createdApi.status)
+          ? createdApi.status
+          : 'DRAFT') as ComprehensiveBlueprint['status'],
+        createdAt: createdApi.createdAt.split('T')[0],
+      };
+
+      saveBlueprintsList([...blueprints, persisted]);
+      setShowBlueprintModal(false);
+      setNewBlueprint({ title: '', totalMarks: 100 });
+      toast.success(`⚡ AI Successfully Generated Exam Blueprint "${persisted.title}" with High-Quality Questions!`, {
+        id: 'createbp',
+      });
     } catch {
-      // Fallback
+      toast.error('Failed to persist blueprint on server.', { id: 'createbp' });
     }
-
-    if (!created) {
-      created = synthesizeExamBlueprint(title, marks, marks > 60 ? 'END_SEM' : 'MID_SEM', syllabusUnits);
-    }
-
-    const updated = [...blueprints, created];
-    saveBlueprintsList(updated);
-    setShowBlueprintModal(false);
-    setNewBlueprint({ title: '', totalMarks: 100 });
-    toast.success(`⚡ AI Successfully Generated Exam Blueprint "${created.title}" with High-Quality Questions!`, { id: 'createbp' });
   };
 
   const selectedCourse = useMemo(() => {
@@ -1788,21 +2010,15 @@ interface UploadedFileItem {
             <COPOMatrix
               data={matrixData}
               onSaveMatrix={async (payload) => {
-                saveMatrix({
-                  ...matrixData,
-                  matrix: matrixData.matrix.map((row) => {
-                    const rowOverrides = payload.bloomOverrides.find((b) => b.coId === row.coId);
-                    return {
-                      ...row,
-                      bloomLevel: rowOverrides ? rowOverrides.bloomLevel : row.bloomLevel,
-                      mappings: row.mappings.map((m) => {
-                        const target = payload.mappings.find((item) => item.coId === row.coId && item.poId === m.poId);
-                        return target ? { ...m, weightage: target.weightage } : m;
-                      })
-                    };
-                  })
+                const courseObj = courses.find((c) => c.id === selectedCourseId) || matrixData.course;
+                const updated = await updateCoPoMatrix(selectedCourseId, {
+                  mappings: payload.mappings,
+                  bloomOverrides: payload.bloomOverrides,
+                  reason: 'Teacher matrix edit',
                 });
-                toast.success('Saved matrix updates');
+                const mapped = mapCoPoMatrixResponse(updated, courseObj);
+                setMatrixData(mapped);
+                setStorageData(`obe_matrix_${selectedCourseId}`, mapped);
               }}
             />
           </div>
