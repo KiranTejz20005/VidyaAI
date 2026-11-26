@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { E2E_ROLES, missingCredentialsMessage } from './credentials';
 
 const student = E2E_ROLES.student;
+const teacher = E2E_ROLES.teacher;
 
 /**
  * Critical journey: authentication.
@@ -46,5 +47,17 @@ test.describe('Auth', () => {
     // Unauthenticated users are bounced back to /login.
     await page.waitForURL('**/login**', { timeout: 30_000 });
     await expect(page).toHaveURL(/login/);
+  });
+
+  test('logs in teacher with valid credentials and lands on the faculty dashboard', async ({ page }) => {
+    test.skip(!teacher.password, missingCredentialsMessage(teacher));
+    await page.goto('/login');
+
+    await page.fill('input[placeholder="Email"]', teacher.email);
+    await page.fill('input[placeholder="Password"]', teacher.password ?? '');
+    await page.click('button:has-text("Sign in")');
+
+    await page.waitForURL('**/dashboard/faculty**', { timeout: 30_000 });
+    await expect(page).toHaveURL(/dashboard\/faculty/);
   });
 });
