@@ -71,23 +71,16 @@ export default function SubmissionsListPage() {
             break;
           }
         } catch {
+          toast.error('Bulk grading job status unavailable', { id: 'bulk-grade' });
           break;
         }
       }
       fetchSubmissions();
     } catch (err: any) {
-      // Legacy fallback preserves existing exams if gateway bulk is unavailable
-      try {
-        const res = await api.post(`/grader/assignments/${assignmentId}/bulk-evaluate`);
-        if (res.data?.success) {
-          toast.success(res.data.message || 'Bulk grading started', { id: 'bulk-grade' });
-          fetchSubmissions();
-          return;
-        }
-      } catch {
-        /* fall through */
-      }
-      toast.error(err.response?.data?.error || 'Bulk grading failed', { id: 'bulk-grade' });
+      toast.error(
+        `${err.response?.data?.error || 'Bulk grading failed'}. Use Bulk AI Grade to retry.`,
+        { id: 'bulk-grade' },
+      );
     }
   };
 

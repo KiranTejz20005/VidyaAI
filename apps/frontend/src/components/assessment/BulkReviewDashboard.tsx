@@ -224,6 +224,7 @@ export function BulkReviewDashboard({ assignmentId }: BulkReviewDashboardProps) 
   const [search, setSearch] = useState('');
   const [bulkJob, setBulkJob] = useState<BulkEvaluateJob | null>(null);
   const [bulkRunning, setBulkRunning] = useState(false);
+  const [bulkGradeError, setBulkGradeError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const clearPoll = useCallback(() => {
@@ -268,16 +269,22 @@ export function BulkReviewDashboard({ assignmentId }: BulkReviewDashboardProps) 
           if (terminal) {
             clearPoll();
             setBulkRunning(false);
+            setBulkGradeError(null);
             await fetchSubmissions();
             if (status.status === 'completed') {
               toast.success(`Bulk grading complete (${status.completed}/${status.total})`);
             } else {
-              toast.error('Bulk grading finished with errors');
+              setBulkGradeError('Bulk grading finished with errors.');
+              toast.error('Bulk grading finished with errors. Use Retry if needed.');
             }
           }
         } catch {
           clearPoll();
           setBulkRunning(false);
+          setBulkGradeError('Could not track bulk grading job status.');
+          toast.error('Bulk grading job status unavailable. Use Retry to try again.', {
+            id: 'bulk-review-grade',
+          });
         }
       };
       void poll();
@@ -294,28 +301,20 @@ export function BulkReviewDashboard({ assignmentId }: BulkReviewDashboardProps) 
     }
     toast.loading('Queuing bulk AI grading…', { id: 'bulk-review-grade' });
     setBulkRunning(true);
+    setBulkGradeError(null);
     try {
       const { jobId } = await bulkEvaluate(assignmentId);
       toast.success(`Bulk job queued (${jobId.slice(0, 8)}…)`, { id: 'bulk-review-grade' });
       startJobPolling(jobId);
     } catch (err: unknown) {
-      try {
-        const res = await api.post(`/grader/assignments/${assignmentId}/bulk-evaluate`);
-        if (res.data?.success) {
-          toast.success(res.data.message || 'Bulk grading started', { id: 'bulk-review-grade' });
-          setBulkRunning(false);
-          setTimeout(() => fetchSubmissions(), 3000);
-          return;
-        }
-      } catch {
-        /* fall through */
-      }
       setBulkRunning(false);
       const message =
         err && typeof err === 'object' && 'response' in err
           ? (err as { response?: { data?: { error?: string } } }).response?.data?.error
           : undefined;
-      toast.error(message || 'Bulk grading failed', { id: 'bulk-review-grade' });
+      const errorText = message || 'Bulk grading failed';
+      setBulkGradeError(errorText);
+      toast.error(`${errorText}. Use Retry to try again.`, { id: 'bulk-review-grade' });
     }
   };
 
@@ -342,11 +341,7 @@ export function BulkReviewDashboard({ assignmentId }: BulkReviewDashboardProps) 
   }, [rows, statusFilter, reviewFilter, search]);
 
   const openSubmission = (row: BulkReviewRow) => {
-    if (row.hasEvaluation) {
-      router.push(`/grader/${row.id}`);
-    } else {
-      router.push(`/teacher/assessments/${assignmentId}/submissions/${row.id}`);
-    }
+    router.push(`/teacher/assessments/${assignmentId}/submissions/${row.id}`);
   };
 
   const tableColumns = [
@@ -436,14 +431,16 @@ export function BulkReviewDashboard({ assignmentId }: BulkReviewDashboardProps) 
 
   if (error && !loading && rows.length === 0) {
     return (
-      <Card>
-        <ErrorState message={error} onRetry={() => void fetchSubmissions()} />
-      </Card>
+      <div data-testid="bulk-review-root">
+        <Card>
+          <ErrorState message={error} onRetry={() => void fetchSubmissions()} />
+        </Card>
+      </div>
     );
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+    <div data-testid="bulk-review-root" style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
       <div
         style={{
           display: 'flex',
@@ -475,7 +472,19 @@ export function BulkReviewDashboard({ assignmentId }: BulkReviewDashboardProps) 
           >
             Submissions list
           </Button>
+          {bulkGradeError && !bulkRunning && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void handleBulkGrade()}
+              aria-label="Retry bulk AI grading"
+            >
+              <RefreshCw size={14} style={{ marginRight: 6 }} aria-hidden />
+              Retry bulk grade
+            </Button>
+          )}
           <Button
+            data-testid="bulk-evaluate-btn"
             variant="primary"
             size="sm"
             onClick={() => void handleBulkGrade()}
@@ -494,6 +503,7 @@ export function BulkReviewDashboard({ assignmentId }: BulkReviewDashboardProps) 
 
       {bulkJob && (bulkJob.status === 'queued' || bulkJob.status === 'processing') && (
         <Card
+          data-testid="bulk-job-status"
           style={{
             borderColor: 'var(--border-strong)',
             background: 'var(--bg-muted)',
@@ -535,6 +545,7 @@ export function BulkReviewDashboard({ assignmentId }: BulkReviewDashboardProps) 
       )}
 
       <div
+        data-testid="bulk-bucket-tabs"
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
@@ -615,6 +626,7 @@ export function BulkReviewDashboard({ assignmentId }: BulkReviewDashboardProps) 
           <DataTable
             columns={tableColumns}
             data={filteredRows}
+            getRowDataTestId={(row: BulkReviewRow) => `bulk-row-${row.id}`}
             onRowClick={(row: BulkReviewRow) => openSubmission(row)}
           />
         )}

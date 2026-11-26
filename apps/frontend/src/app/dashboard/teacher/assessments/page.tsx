@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
 
-export default function DashboardTeacherAssessmentsRedirect() {
-  redirect('/assignments');
+export default function Redirect() {
+  redirect('/teacher/assessments');
 }

@@ -21,6 +21,10 @@ import type {
   CreateBlueprintData,
   AddBlueprintItemData,
   MappingReview,
+  CoPoMatrixResponse,
+  UpdateCoPoMatrixData,
+  GeneratedBlueprintPayload,
+  GeneratedExamBlueprint,
 } from '@/types/obe.types';
 
 export async function listCourses(departmentId?: string): Promise<Course[]> {
@@ -178,5 +182,25 @@ export async function getCoAttainment(courseId: string, threshold?: number): Pro
 export async function getPoAttainment(threshold?: number): Promise<PoAttainmentResponse> {
   const params = threshold !== undefined ? `?threshold=${threshold}` : '';
   const res = await api.get(`/obe/attainment/po${params}`);
+  return res.data.data;
+}
+
+export async function getCoPoMatrix(courseId: string): Promise<CoPoMatrixResponse> {
+  const res = await api.get(`/obe/courses/${courseId}/co-po-matrix`);
+  return res.data.data;
+}
+
+export async function updateCoPoMatrix(
+  courseId: string,
+  data: UpdateCoPoMatrixData
+): Promise<CoPoMatrixResponse> {
+  const res = await api.post(`/obe/courses/${courseId}/co-po-matrix`, data);
+  return res.data.data;
+}
+
+export async function generateBlueprintQuestions(
+  data: GeneratedBlueprintPayload
+): Promise<GeneratedExamBlueprint> {
+  const res = await api.post('/obe/blueprints/generate', data);
   return res.data.data;
 }
