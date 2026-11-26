@@ -30,7 +30,7 @@ export const createInvitation = async ({
     });
 
     // Only the SHA-256 digest is stored; the raw token exists solely in the emailed link.
-    const token = crypto.randomBytes(32).toString('hex');
+    const rawToken = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 7); // 7 days expiry
 
@@ -39,18 +39,18 @@ export const createInvitation = async ({
         email,
         role,
         organizationId,
-        token: hashOpaqueToken(token),
+        token: hashOpaqueToken(rawToken),
         expiresAt,
         createdById,
         status: 'PENDING'
       }
     });
 
-    const emailSent = await sendInvitationEmail(email, role, token);
+    const emailSent = await sendInvitationEmail(email, role, rawToken);
 
     // Never return the stored digest; callers get delivery status instead.
-    const { token, ...safeInvitation } = invitation;
-    void token;
+    const { token: _storedDigest, ...safeInvitation } = invitation;
+    void _storedDigest;
     return { ...safeInvitation, emailSent };
   } catch (error) {
     logger.error({ err: error }, '[createInvitation] Failed');
