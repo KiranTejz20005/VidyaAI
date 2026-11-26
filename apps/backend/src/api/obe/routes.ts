@@ -43,6 +43,11 @@ import {
   updateCoPoMatrixController,
   classifyBloomController,
   generateBlueprintQuestionsController,
+  listSyllabusUnits,
+  replaceSyllabusUnits,
+  createSyllabusUnit,
+  updateSyllabusUnit,
+  deleteSyllabusUnit,
 } from './controller';
 import {
   idParamSchema,
@@ -65,6 +70,9 @@ import {
   coPoMatrixParamSchema,
   updateCoPoMatrixSchema,
   classifyBloomSchema,
+  replaceSyllabusUnitsSchema,
+  createSyllabusUnitSchema,
+  updateSyllabusUnitSchema,
 } from './validators';
 
 const router = Router();
@@ -80,6 +88,12 @@ router.post('/courses/:courseId/validate', requireRole('ADMIN', 'TEACHER'), vali
 router.get('/courses/:id/co-po-matrix', requireRole('ADMIN', 'TEACHER'), validate(coPoMatrixParamSchema), asyncHandler(getCoPoMatrixController));
 router.post('/courses/:id/co-po-matrix', requireRole('ADMIN', 'TEACHER'), validate(updateCoPoMatrixSchema), asyncHandler(updateCoPoMatrixController));
 router.post('/classify-bloom', requireRole('ADMIN', 'TEACHER'), validate(classifyBloomSchema), asyncHandler(classifyBloomController));
+
+router.get('/courses/:courseId/units', requireRole('ADMIN', 'TEACHER'), validate(courseIdParamSchema), asyncHandler(listSyllabusUnits));
+router.put('/courses/:courseId/units', requireRole('ADMIN', 'TEACHER'), validate(replaceSyllabusUnitsSchema), asyncHandler(replaceSyllabusUnits));
+router.post('/courses/:courseId/units', requireRole('ADMIN', 'TEACHER'), validate(createSyllabusUnitSchema), asyncHandler(createSyllabusUnit));
+router.put('/units/:id', requireRole('ADMIN', 'TEACHER'), validate(updateSyllabusUnitSchema), asyncHandler(updateSyllabusUnit));
+router.delete('/units/:id', requireRole('ADMIN', 'TEACHER'), validate(idParamSchema), asyncHandler(deleteSyllabusUnit));
 
 router.get('/courses/:courseId/outcomes', requireRole('ADMIN', 'TEACHER'), validate(courseIdParamSchema), asyncHandler(listCourseOutcomes));
 router.post('/courses/:courseId/outcomes', requireRole('ADMIN', 'TEACHER'), validate(createCourseOutcomeSchema), asyncHandler(createCourseOutcome));

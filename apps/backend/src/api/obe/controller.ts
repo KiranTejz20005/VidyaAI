@@ -6,6 +6,7 @@ import { BlueprintService } from '../../services/obe/blueprint.service';
 import { AttainmentService } from '../../services/obe/attainment.service';
 import { MappingReviewService } from '../../services/obe/mapping-review.service';
 import { BlueprintValidationService } from '../../services/obe/blueprint-validation.service';
+import { SyllabusUnitService } from '../../services/obe/syllabus-unit.service';
 
 export const listCourses = async (req: Request, res: Response): Promise<void> => {
   const orgId = requireRequestOrgId(req);
@@ -536,4 +537,39 @@ export const generateBlueprintQuestionsController = async (req: Request, res: Re
   };
 
   sendSuccess(res, { data: generated });
+};
+
+export const listSyllabusUnits = async (req: Request, res: Response): Promise<void> => {
+  const orgId = requireRequestOrgId(req);
+  const { courseId } = req.params;
+  const units = await SyllabusUnitService.listUnits(courseId, orgId);
+  sendSuccess(res, { data: units });
+};
+
+export const replaceSyllabusUnits = async (req: Request, res: Response): Promise<void> => {
+  const orgId = requireRequestOrgId(req);
+  const { courseId } = req.params;
+  const units = await SyllabusUnitService.replaceUnits(courseId, orgId, req.body.units ?? []);
+  sendSuccess(res, { data: units });
+};
+
+export const createSyllabusUnit = async (req: Request, res: Response): Promise<void> => {
+  const orgId = requireRequestOrgId(req);
+  const { courseId } = req.params;
+  const unit = await SyllabusUnitService.createUnit(courseId, orgId, req.body);
+  sendCreated(res, unit);
+};
+
+export const updateSyllabusUnit = async (req: Request, res: Response): Promise<void> => {
+  const orgId = requireRequestOrgId(req);
+  const { id } = req.params;
+  const unit = await SyllabusUnitService.updateUnit(id, orgId, req.body);
+  sendSuccess(res, { data: unit });
+};
+
+export const deleteSyllabusUnit = async (req: Request, res: Response): Promise<void> => {
+  const orgId = requireRequestOrgId(req);
+  const { id } = req.params;
+  await SyllabusUnitService.deleteUnit(id, orgId);
+  sendNoContent(res);
 };

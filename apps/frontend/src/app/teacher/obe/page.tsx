@@ -39,8 +39,16 @@ import {
   createCourseOutcome,
   listPrograms,
   createProgramOutcome,
+  listSyllabusUnits,
+  replaceSyllabusUnits,
 } from '@/services/obe.service';
-import type { Blueprint as ApiBlueprint, CoPoMatrixResponse, CoAttainmentResponse } from '@/types/obe.types';
+import type {
+  Blueprint as ApiBlueprint,
+  CoPoMatrixResponse,
+  CoAttainmentResponse,
+  CourseSyllabusUnit,
+  ReplaceSyllabusUnitsData,
+} from '@/types/obe.types';
 
 const BLOOM_LEVELS = ['REMEMBER', 'UNDERSTAND', 'APPLY', 'ANALYZE', 'EVALUATE', 'CREATE'] as const;
 type BloomLevel = typeof BLOOM_LEVELS[number];
@@ -157,6 +165,24 @@ function mapAttainmentResponse(res: CoAttainmentResponse): AttainmentResult[] {
     threshold: outcome.threshold,
     metThreshold: outcome.metThreshold,
     bloomLevel: outcome.bloomLevel as BloomLevel,
+  }));
+}
+
+function mapApiUnitsToLocal(units: CourseSyllabusUnit[]): SyllabusUnit[] {
+  return units.map((u) => ({
+    id: u.id,
+    unitNumber: u.unitNumber,
+    title: u.title,
+    topics: Array.isArray(u.topics) ? u.topics : [],
+    coMapped: u.coMapped || '',
+    bloomLevel: (BLOOM_LEVELS.includes(u.bloomLevel as BloomLevel)
+      ? u.bloomLevel
+      : 'UNDERSTAND') as BloomLevel,
+    hours: u.hours ?? 0,
+    status:
+      u.status === 'COMPLETED' || u.status === 'IN_PROGRESS' || u.status === 'UPCOMING'
+        ? u.status
+        : 'UPCOMING',
   }));
 }
 
@@ -698,22 +724,28 @@ interface UploadedFileItem {
       code: 'COURSE101',
     };
 
-    // TODO: Replace with syllabus units API when available.
-    const savedUnits = getStorageData<SyllabusUnit[]>(`obe_units_${selectedCourseId}`, []);
-    setSyllabusUnits(savedUnits);
-
     let cancelled = false;
 
     (async () => {
       setLoading(true);
       try {
-        const [matrixResult, blueprintsResult, attainmentResult] = await Promise.allSettled([
+        const [unitsResult, matrixResult, blueprintsResult, attainmentResult] = await Promise.allSettled([
+          listSyllabusUnits(selectedCourseId),
           getCoPoMatrix(selectedCourseId),
           listBlueprints(selectedCourseId),
           getAttainmentDashboard(selectedCourseId).catch(() => getCoAttainment(selectedCourseId)),
         ]);
 
         if (cancelled) return;
+
+        if (unitsResult.status === 'fulfilled') {
+          const mappedUnits = mapApiUnitsToLocal(unitsResult.value);
+          setSyllabusUnits(mappedUnits);
+          // localStorage is cache-only — API is the source of truth for syllabus units.
+          setStorageData(`obe_units_${selectedCourseId}`, mappedUnits);
+        } else {
+          setSyllabusUnits([]);
+        }
 
         if (matrixResult.status === 'fulfilled') {
           const matrix = mapCoPoMatrixResponse(matrixResult.value, courseObj);
@@ -797,11 +829,36 @@ interface UploadedFileItem {
     }
   }, [courses, selectedCourseId]);
 
-  // Save units locally until a syllabus API exists.
-  const saveUnits = (units: SyllabusUnit[]) => {
-    setSyllabusUnits(units);
-    // TODO: persist syllabus units via API when available.
-    setStorageData(`obe_units_${selectedCourseId}`, units);
+  const saveUnits = async (units: SyllabusUnit[]): Promise<SyllabusUnit[] | null> => {
+    if (!selectedCourseId) {
+      setSyllabusUnits(units);
+      return units;
+    }
+
+    try {
+      const payload: ReplaceSyllabusUnitsData = {
+        units: units.map((u) => ({
+          id: u.id,
+          unitNumber: u.unitNumber,
+          title: u.title,
+          topics: u.topics,
+          coMapped: u.coMapped,
+          bloomLevel: u.bloomLevel,
+          hours: u.hours,
+          status: u.status,
+        })),
+      };
+      const saved = await replaceSyllabusUnits(selectedCourseId, payload);
+      const mapped = mapApiUnitsToLocal(saved);
+      setSyllabusUnits(mapped);
+      // localStorage is cache-only — not the source of truth for syllabus units.
+      setStorageData(`obe_units_${selectedCourseId}`, mapped);
+      return mapped;
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to save syllabus units');
+      return null;
+    }
   };
 
   const saveBlueprintsList = (bps: ComprehensiveBlueprint[]) => {
@@ -810,7 +867,7 @@ interface UploadedFileItem {
   };
 
   // Add Dynamic Syllabus Unit
-  const handleAddUnit = () => {
+  const handleAddUnit = async () => {
     if (!newUnit.title.trim()) {
       toast.error('Unit title is required');
       return;
@@ -834,22 +891,28 @@ interface UploadedFileItem {
     let updatedUnits: SyllabusUnit[];
     if (editingUnit) {
       updatedUnits = syllabusUnits.map((u) => (u.id === editingUnit.id ? unitObj : u));
-      toast.success(`Updated Unit ${unitObj.unitNumber}`);
     } else {
       updatedUnits = [...syllabusUnits, unitObj];
+    }
+
+    const saved = await saveUnits(updatedUnits);
+    if (!saved) return;
+
+    if (editingUnit) {
+      toast.success(`Updated Unit ${unitObj.unitNumber}`);
+    } else {
       toast.success(`Added Unit ${unitObj.unitNumber}`);
     }
 
-    saveUnits(updatedUnits);
     setShowAddUnitModal(false);
     setEditingUnit(null);
     setNewUnit({ title: '', topics: '', coMapped: 'CO1', bloomLevel: 'UNDERSTAND', hours: 10 });
   };
 
-  const handleDeleteUnit = (id: string) => {
+  const handleDeleteUnit = async (id: string) => {
     const updated = syllabusUnits.filter((u) => u.id !== id).map((u, idx) => ({ ...u, unitNumber: idx + 1 }));
-    saveUnits(updated);
-    toast.success('Unit removed');
+    const saved = await saveUnits(updated);
+    if (saved) toast.success('Unit removed');
   };
 
   // Maximum retry cycles per file before marking as permanently failed (Strict limit: 2 attempts)
@@ -1409,7 +1472,7 @@ interface UploadedFileItem {
   };
 
   // Structured Multi-Stage Syllabus Parser and Deduplication Algorithm
-  const handleImportSyllabus = () => {
+  const handleImportSyllabus = async () => {
     if (!importText.trim()) {
       toast.error('Please paste or extract syllabus text to import');
       return;
@@ -1446,7 +1509,8 @@ interface UploadedFileItem {
         };
       });
 
-      saveUnits(parsedUnits);
+      const saved = await saveUnits(parsedUnits);
+      if (!saved) return;
       closeAndResetImportModal();
       toast.success(`⚡ Successfully structured and imported ${parsedUnits.length} syllabus units!`);
       return;
@@ -1471,7 +1535,8 @@ interface UploadedFileItem {
       },
     ];
 
-    saveUnits(fallbackUnits);
+    const saved = await saveUnits(fallbackUnits);
+    if (!saved) return;
     closeAndResetImportModal();
     toast.success('Successfully imported syllabus units!');
   };
