@@ -1,1 +1,5 @@
-export { default } from '@/app/teacher/assessments/duplicate-checker/page';
+import { redirect } from 'next/navigation';
+
+export default function Redirect() {
+  redirect('/teacher/assessments/duplicate-checker');
+}

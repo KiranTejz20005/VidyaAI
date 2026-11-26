@@ -1,1 +1,10 @@
-export { default } from '@/app/teacher/assessments/[id]/submissions/page';
+import { redirect } from 'next/navigation';
+
+export default async function Redirect({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = await params;
+  redirect(`/teacher/assessments/${id}/submissions`);
+}
