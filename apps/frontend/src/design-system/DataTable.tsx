@@ -19,10 +19,20 @@ interface DataTableProps {
   emptyMessage?: string;
   emptyIcon?: React.ReactNode;
   onRowClick?: (row: any) => void;
+  getRowDataTestId?: (row: any) => string | undefined;
   className?: string;
 }
 
-export function DataTable({ columns, data, loading, emptyMessage = 'No data found', emptyIcon, onRowClick, className }: DataTableProps) {
+export function DataTable({
+  columns,
+  data,
+  loading,
+  emptyMessage = 'No data found',
+  emptyIcon,
+  onRowClick,
+  getRowDataTestId,
+  className,
+}: DataTableProps) {
   if (loading) {
     return <LoadingState lines={5} />;
   }
@@ -66,6 +76,7 @@ export function DataTable({ columns, data, loading, emptyMessage = 'No data foun
           {data.map((row, idx) => (
             <tr
               key={row.id || idx}
+              data-testid={getRowDataTestId?.(row)}
               onClick={() => onRowClick?.(row)}
               style={{
                 borderBottom: '1px solid var(--border)',
