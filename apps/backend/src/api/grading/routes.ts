@@ -1,8 +1,10 @@
-import { Router } from 'express';
+import { Router, type Request, type Response, type NextFunction } from 'express';
 import { asyncHandler } from '../../utils/async-handler';
-import { authenticate } from '../../middlewares/auth.middleware';
+import { authenticate, requireOrganizationScope } from '../../middlewares/auth.middleware';
 import { validate } from '../../middlewares/validate.middleware';
 import { requireRole } from '../../security/role.middleware';
+import { requirePermission } from '../../security/access-control';
+import { PERMISSIONS } from '../../security/permissions';
 import {
   saveGradingConfig,
   getGradingConfig,
@@ -23,15 +25,75 @@ import {
 
 const router = Router();
 
-router.use(authenticate);
+const gradeStaff = requireRole('TEACHER', 'FACULTY', 'ADMIN', 'SUPER_ADMIN');
+const gradePermission = requirePermission(PERMISSIONS.GRADE_ASSESSMENT);
 
-router.post('/config/:assignmentId', requireRole('ADMIN', 'TEACHER'), validate(assignmentIdParamSchema.merge(createGradingConfigSchema)), asyncHandler(saveGradingConfig));
-router.get('/config/:assignmentId', requireRole('ADMIN', 'TEACHER'), validate(assignmentIdParamSchema), asyncHandler(getGradingConfig));
-router.get('/submissions/:assignmentId', requireRole('ADMIN', 'TEACHER'), validate(assignmentIdParamSchema), asyncHandler(listSubmissionsForGrading));
-router.post('/submissions/:submissionId/evaluate', requireRole('ADMIN', 'TEACHER'), validate(submissionIdParamSchema), asyncHandler(evaluateSubmissionById));
-router.get('/submissions/:submissionId/evaluation', requireRole('ADMIN', 'TEACHER', 'STUDENT'), validate(submissionIdParamSchema), asyncHandler(getEvaluationResult));
-router.post('/submissions/:submissionId/override', requireRole('ADMIN', 'TEACHER'), validate(gradeOverrideSchema), asyncHandler(overrideGrade));
-router.post('/bulk-evaluate/:assignmentId', requireRole('ADMIN', 'TEACHER'), validate(assignmentIdParamSchema), asyncHandler(bulkEvaluate));
-router.get('/bulk-evaluate/:jobId', requireRole('ADMIN', 'TEACHER'), validate(jobIdParamSchema), asyncHandler(getBulkEvaluateJobStatus));
+/** Staff paths mirror grader.routes; students may read published results without GRADE_ASSESSMENT. */
+const requireGradeAssessmentUnlessStudent = (req: Request, res: Response, next: NextFunction) => {
+  if (req.user?.role === 'STUDENT') {
+    return next();
+  }
+  return gradePermission(req, res, next);
+};
+
+router.use(authenticate);
+router.use(requireOrganizationScope());
+
+router.post(
+  '/config/:assignmentId',
+  gradeStaff,
+  gradePermission,
+  validate(assignmentIdParamSchema.merge(createGradingConfigSchema)),
+  asyncHandler(saveGradingConfig),
+);
+router.get(
+  '/config/:assignmentId',
+  gradeStaff,
+  gradePermission,
+  validate(assignmentIdParamSchema),
+  asyncHandler(getGradingConfig),
+);
+router.get(
+  '/submissions/:assignmentId',
+  gradeStaff,
+  gradePermission,
+  validate(assignmentIdParamSchema),
+  asyncHandler(listSubmissionsForGrading),
+);
+router.post(
+  '/submissions/:submissionId/evaluate',
+  gradeStaff,
+  gradePermission,
+  validate(submissionIdParamSchema),
+  asyncHandler(evaluateSubmissionById),
+);
+router.get(
+  '/submissions/:submissionId/evaluation',
+  requireRole('TEACHER', 'FACULTY', 'ADMIN', 'SUPER_ADMIN', 'STUDENT'),
+  requireGradeAssessmentUnlessStudent,
+  validate(submissionIdParamSchema),
+  asyncHandler(getEvaluationResult),
+);
+router.post(
+  '/submissions/:submissionId/override',
+  gradeStaff,
+  gradePermission,
+  validate(gradeOverrideSchema),
+  asyncHandler(overrideGrade),
+);
+router.post(
+  '/bulk-evaluate/:assignmentId',
+  gradeStaff,
+  gradePermission,
+  validate(assignmentIdParamSchema),
+  asyncHandler(bulkEvaluate),
+);
+router.get(
+  '/bulk-evaluate/:jobId',
+  gradeStaff,
+  gradePermission,
+  validate(jobIdParamSchema),
+  asyncHandler(getBulkEvaluateJobStatus),
+);
 
 export default router;
