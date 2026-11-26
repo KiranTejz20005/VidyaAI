@@ -186,3 +186,33 @@ export const classifyBloomSchema = z.object({
     }).optional(),
   }),
 });
+
+const bloomEnum = z.enum(['REMEMBER', 'UNDERSTAND', 'APPLY', 'ANALYZE', 'EVALUATE', 'CREATE']);
+const unitStatusEnum = z.enum(['COMPLETED', 'IN_PROGRESS', 'UPCOMING']);
+
+const syllabusUnitBodySchema = z.object({
+  unitNumber: z.number().int().min(1).max(50),
+  title: z.string().min(1).max(255),
+  topics: z.array(z.string().max(500)).max(100).optional(),
+  coMapped: z.string().max(50).optional(),
+  bloomLevel: bloomEnum.optional(),
+  hours: z.number().int().min(0).max(500).optional(),
+  status: unitStatusEnum.optional(),
+});
+
+export const replaceSyllabusUnitsSchema = z.object({
+  params: z.object({ courseId: uuidParam }),
+  body: z.object({
+    units: z.array(syllabusUnitBodySchema.extend({ id: uuidParam.optional() })).max(50),
+  }),
+});
+
+export const createSyllabusUnitSchema = z.object({
+  params: z.object({ courseId: uuidParam }),
+  body: syllabusUnitBodySchema,
+});
+
+export const updateSyllabusUnitSchema = z.object({
+  params: z.object({ id: uuidParam }),
+  body: syllabusUnitBodySchema.partial(),
+});

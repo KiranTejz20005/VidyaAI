@@ -1645,12 +1645,33 @@ model Course {
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
-  outcomes    CourseOutcome[]
-  blueprints  Blueprint[]
-  assignments Assignment[]
+  outcomes       CourseOutcome[]
+  blueprints     Blueprint[]
+  assignments    Assignment[]
+  syllabusUnits  CourseSyllabusUnit[]
 
   @@unique([code, organizationId])
   @@index([departmentId])
+  @@index([organizationId])
+}
+
+model CourseSyllabusUnit {
+  id             String     @id @default(uuid())
+  courseId       String
+  course         Course     @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  organizationId String
+  unitNumber     Int
+  title          String
+  topics         String[]
+  coMapped       String     @default("")
+  bloomLevel     BloomLevel @default(UNDERSTAND)
+  hours          Int        @default(0)
+  status         String     @default("UPCOMING")
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@unique([courseId, unitNumber])
+  @@index([courseId])
   @@index([organizationId])
 }
 

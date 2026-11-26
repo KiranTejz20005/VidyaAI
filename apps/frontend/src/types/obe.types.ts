@@ -291,6 +291,34 @@ export interface GeneratedBlueprintPayload {
   cos?: unknown[];
 }
 
+export interface CourseSyllabusUnit {
+  id: string;
+  courseId: string;
+  organizationId: string;
+  unitNumber: number;
+  title: string;
+  topics: string[];
+  coMapped: string;
+  bloomLevel: string;
+  hours: number;
+  status: 'COMPLETED' | 'IN_PROGRESS' | 'UPCOMING' | string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface ReplaceSyllabusUnitsData {
+  units: Array<{
+    id?: string;
+    unitNumber: number;
+    title: string;
+    topics: string[];
+    coMapped?: string;
+    bloomLevel?: string;
+    hours?: number;
+    status?: string;
+  }>;
+}
+
 export interface GeneratedExamBlueprint {
   id: string;
   title: string;

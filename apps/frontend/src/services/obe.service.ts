@@ -25,6 +25,8 @@ import type {
   UpdateCoPoMatrixData,
   GeneratedBlueprintPayload,
   GeneratedExamBlueprint,
+  CourseSyllabusUnit,
+  ReplaceSyllabusUnitsData,
 } from '@/types/obe.types';
 
 export async function listCourses(departmentId?: string): Promise<Course[]> {
@@ -203,4 +205,37 @@ export async function generateBlueprintQuestions(
 ): Promise<GeneratedExamBlueprint> {
   const res = await api.post('/obe/blueprints/generate', data);
   return res.data.data;
+}
+
+export async function listSyllabusUnits(courseId: string): Promise<CourseSyllabusUnit[]> {
+  const res = await api.get(`/obe/courses/${courseId}/units`);
+  return res.data.data;
+}
+
+export async function replaceSyllabusUnits(
+  courseId: string,
+  data: ReplaceSyllabusUnitsData,
+): Promise<CourseSyllabusUnit[]> {
+  const res = await api.put(`/obe/courses/${courseId}/units`, data);
+  return res.data.data;
+}
+
+export async function createSyllabusUnit(
+  courseId: string,
+  data: ReplaceSyllabusUnitsData['units'][number],
+): Promise<CourseSyllabusUnit> {
+  const res = await api.post(`/obe/courses/${courseId}/units`, data);
+  return res.data.data;
+}
+
+export async function updateSyllabusUnit(
+  id: string,
+  data: Partial<ReplaceSyllabusUnitsData['units'][number]>,
+): Promise<CourseSyllabusUnit> {
+  const res = await api.put(`/obe/units/${id}`, data);
+  return res.data.data;
+}
+
+export async function deleteSyllabusUnit(id: string): Promise<void> {
+  await api.delete(`/obe/units/${id}`);
 }
