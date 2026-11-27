@@ -29,16 +29,11 @@ async function checkLimit(
   return { allowed: result[0] === 1, current: result[1] };
 }
 
-// Check cooldown key existence and set it if not present
+/** Atomic cooldown SET NX. Used by paperGenerationRateLimiter. Phase 3 plan. */
 async function checkAndSetCooldown(key: string, expirySeconds: number): Promise<boolean> {
   const redis = getRedisClient();
-  const isLocked = await redis.get(key);
-  if (isLocked) {
-    return false;
-  }
-  await redis.set(key, '1', 'EX', expirySeconds);
-  return true;
-}
+  const result = await redis.set(key, '1', 'EX', expirySeconds, 'NX');
+  return result === 'OK';}
 
 export const paperGenerationRateLimiter = async (
   req: Request,
@@ -316,6 +311,9 @@ export const globalIpRateLimiter = async (
     }
   } catch (err) {
     logger.error(`[globalIpRateLimiter] Error: ${err}`);
+    // Fail closed: do not silently disable global rate limiting when Redis is down.
+    res.status(503).json({ success: false, error: 'Rate limiting temporarily unavailable. Please retry shortly.', code: 'RATE_LIMIT_UNAVAILABLE' });
+    return;
   }
 
   next();
@@ -343,6 +341,8 @@ export const aiGenerationRateLimiter = async (
     }
   } catch (err) {
     logger.error(`[aiGenerationRateLimiter] Error: ${err}`);
+    res.status(503).json({ success: false, error: 'Rate limiting temporarily unavailable. Please retry shortly.', code: 'RATE_LIMIT_UNAVAILABLE' });
+    return;
   }
 
   next();
