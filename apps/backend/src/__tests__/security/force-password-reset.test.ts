@@ -4,9 +4,13 @@ import type { Request, Response, NextFunction } from 'express';
 vi.mock('../../services/auth.service', () => ({
   verifyAccessToken: vi.fn(),
 }));
+vi.mock('../../config/prisma', () => ({
+  default: { user: { findUnique: vi.fn() } },
+}));
 vi.mock('../../utils/logger', () => ({ logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
 import { verifyAccessToken } from '../../services/auth.service';
+import prisma from '../../config/prisma';
 import { authenticate } from '../../middlewares/auth.middleware';
 
 function mockRes(): Response {
@@ -27,6 +31,13 @@ describe('authenticate — forcePasswordReset (JWT pwr)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     next = vi.fn();
+    vi.mocked(prisma.user.findUnique).mockImplementation((async ({ where }: any) => ({
+      id: where.id,
+      role: 'TEACHER',
+      status: 'ACTIVE',
+      organizationId: null,
+      forcePasswordReset: true,
+    })) as any);
     vi.mocked(verifyAccessToken).mockReturnValue({
       userId: 'u-pwr',
       email: 'temp@school.edu',
@@ -38,7 +49,7 @@ describe('authenticate — forcePasswordReset (JWT pwr)', () => {
     });
   });
 
-  it('returns 403 PASSWORD_RESET_REQUIRED on non-allowed paths', () => {
+  it('returns 403 PASSWORD_RESET_REQUIRED on non-allowed paths', async () => {
     const req = {
       headers: { authorization: 'Bearer valid.jwt' },
       cookies: {},
@@ -46,7 +57,7 @@ describe('authenticate — forcePasswordReset (JWT pwr)', () => {
     } as unknown as Request;
     const res = mockRes();
 
-    authenticate(req, res, next);
+    await authenticate(req, res, next);
 
     expect(res.statusCode).toBe(403);
     expect(res.json).toHaveBeenCalledWith({
@@ -57,7 +68,7 @@ describe('authenticate — forcePasswordReset (JWT pwr)', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('allows password change endpoint while reset is required', () => {
+  it('allows password change endpoint while reset is required', async () => {
     const req = {
       headers: { authorization: 'Bearer valid.jwt' },
       cookies: {},
@@ -65,20 +76,27 @@ describe('authenticate — forcePasswordReset (JWT pwr)', () => {
     } as unknown as Request;
     const res = mockRes();
 
-    authenticate(req, res, next);
+    await authenticate(req, res, next);
 
     expect(next).toHaveBeenCalledOnce();
     expect(res.json).not.toHaveBeenCalled();
     expect(req.user?.id).toBe('u-pwr');
   });
 
-  it('does not block when forcePasswordReset is false', () => {
+  it('does not block when DB forcePasswordReset is false even if JWT still has pwr', async () => {
+    vi.mocked(prisma.user.findUnique).mockImplementation((async ({ where }: any) => ({
+      id: where.id,
+      role: 'STUDENT',
+      status: 'ACTIVE',
+      organizationId: 'org-1',
+      forcePasswordReset: false,
+    })) as any);
     vi.mocked(verifyAccessToken).mockReturnValue({
       userId: 'u-normal',
       email: 'ok@school.edu',
       role: 'STUDENT',
       organizationId: 'org-1',
-      forcePasswordReset: false,
+      forcePasswordReset: true,
     });
 
     const req = {
@@ -88,7 +106,7 @@ describe('authenticate — forcePasswordReset (JWT pwr)', () => {
     } as unknown as Request;
     const res = mockRes();
 
-    authenticate(req, res, next);
+    await authenticate(req, res, next);
 
     expect(next).toHaveBeenCalledOnce();
   });

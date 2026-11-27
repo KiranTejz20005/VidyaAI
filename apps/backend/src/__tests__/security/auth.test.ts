@@ -47,6 +47,12 @@ vi.mock('../../config/prisma', () => ({
       deleteMany: vi.fn().mockResolvedValue({}),
     },
     organization: { findMany: vi.fn().mockResolvedValue([]), findUnique: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({}) },
+    $transaction: vi.fn(async (fn: (tx: unknown) => unknown) =>
+      fn({
+        organization: { create: vi.fn().mockResolvedValue({ id: 'org-personal' }) },
+        user: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      }),
+    ),
   },
 }));
 
