@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { getDashboardRoute } from '@/utils/navigation';
 import { api } from '@/lib/api';
 import {
   GraduationCap,
@@ -51,10 +53,12 @@ export default function AdminDashboard() {
   
   // Check if user is an admin
   const isAdmin = user?.role === 'ADMIN' || user?.role === 'SUPER_ADMIN' || user?.role === 'ORG_ADMIN';
+  const router = useRouter();
 
   useEffect(() => {
+    if (!user) return;
     if (!isAdmin) {
-      setLoading(false);
+      router.replace(getDashboardRoute(user.role));
       return;
     }
 
@@ -74,44 +78,13 @@ export default function AdminDashboard() {
         setLoading(false);
       }
     })();
-  }, [activeOrganizationId, isAdmin]);
+  }, [activeOrganizationId, isAdmin, user, router]);
 
   if (loading) return <LoadingState lines={8} />;
   if (error) return <ErrorState message={error} onRetry={() => { setLoading(true); setError(null); }} />;
 
-  // Non-admin users see a different dashboard
-  if (!isAdmin) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-        <PageHeader
-          title="Dashboard"
-          subtitle="Welcome to your dashboard."
-        />
-        <Card padding="clamp(16px, 2vw, 20px)">
-          <p style={{ color: 'var(--text-secondary)', marginBottom: 16 }}>
-            You don't have access to the admin analytics dashboard. Please contact your administrator if you need to view organizational statistics.
-          </p>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <ActionCard
-              icon={<BookOpen size={16} />}
-              label="View My Lessons"
-              href="/lessons"
-            />
-            <ActionCard
-              icon={<Users size={16} />}
-              label="My Classes"
-              href="/classes"
-            />
-            <ActionCard
-              icon={<CheckCircle size={16} />}
-              label="View Assignments"
-              href="/assignments"
-            />
-          </div>
-        </Card>
-      </div>
-    );
-  }
+  // Non-admin roles are redirected to their own dashboard in the effect above.
+  if (!isAdmin) return <LoadingState lines={4} />;
 
   const stats = { 
     totalFaculty: data?.totalFaculty || 0, 
