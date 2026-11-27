@@ -2,29 +2,58 @@ import { Request, Response } from 'express';
 import { sendSuccess, sendAccepted, sendNoContent } from '../common/response';
 import { ApiError } from '../common/errors';
 import { parsePagination, buildPagination } from '../common/pagination';
-import { getRequestUserId, requireRequestOrgId, orgScope, isStudentRole } from '../../security/request-context';
+// Called by question-paper/routes list/get/delete/archive. Reads GeneratedPaper + Assignment.
+// Phase 3 plan: owner-scope teachers; student enrollment. User: implement Phase 3 plan.
+import {
+  getRequestUserId,
+  requireRequestOrgId,
+  orgScope,
+  isStudentRole,
+  isAdminRole,
+  isSuperAdmin,
+} from '../../security/request-context';
 import { createAssignment, enqueueGeneration } from '../../services/assignment.service';
 import { buildCanonicalGenerationState } from '../../services/canonical-metadata.service';
 import { getGenerationQueue } from '../../queues/generation.queue';
+import { assertStudentCanViewAssignment } from '../../security/assignment-access';
 import prisma from '../../config/prisma';
 import { serializeGeneratedPaper, serializeGenerationJob, serializeAnswerKey } from './serializers';
 
 /** Assignment states in which a paper is released to students. */
 const STUDENT_VISIBLE_ASSIGNMENT_STATUSES = new Set(['PUBLISHED', 'ACTIVE', 'COMPLETED']);
 
-/**
- * Loads a paper inside the caller's tenant. Students additionally only see
- * papers whose assignment has been released to them; anything else is a 404
- * so the response does not reveal that a draft exists.
- */
+/** Teachers: own assignments only; admins: whole org. */
+function paperListScope(req: Request): Record<string, unknown> {
+  const where: Record<string, unknown> = { organizationId: requireRequestOrgId(req) };
+  if (!isAdminRole(req.user?.role) && !isSuperAdmin(req.user?.role)) {
+    where.assignment = { createdById: getRequestUserId(req) };
+  }
+  return where;
+}
+
 async function loadPaperForRequest(req: Request, id: string) {
+  const teacherOwnerScope =
+    !isAdminRole(req.user?.role) && !isSuperAdmin(req.user?.role) && !isStudentRole(req.user?.role)
+      ? { assignment: { createdById: getRequestUserId(req) } }
+      : {};
   const paper = await prisma.generatedPaper.findFirst({
-    where: { id, ...orgScope(req) },
-    include: { assignment: { select: { status: true } } },
+    where: { id, ...orgScope(req), ...teacherOwnerScope },
+    include: {
+      assignment: {
+        select: { id: true, status: true, organizationId: true, createdById: true, classId: true },
+      },
+    },
   });
   if (!paper) throw ApiError.notFound('Paper not found');
-  if (isStudentRole(req.user?.role) && !STUDENT_VISIBLE_ASSIGNMENT_STATUSES.has(paper.assignment.status)) {
-    throw ApiError.notFound('Paper not found');
+  if (isStudentRole(req.user?.role)) {
+    if (!STUDENT_VISIBLE_ASSIGNMENT_STATUSES.has(paper.assignment.status)) {
+      throw ApiError.notFound('Paper not found');
+    }
+    try {
+      await assertStudentCanViewAssignment(req, paper.assignment as any);
+    } catch {
+      throw ApiError.notFound('Paper not found');
+    }
   }
   return paper;
 }
@@ -116,10 +145,9 @@ export const checkGenerationJob = async (req: Request, res: Response): Promise<v
 
 export const listPapers = async (req: Request, res: Response): Promise<void> => {
   const { page, limit, sort, order } = parsePagination(req);
-  const orgId = requireRequestOrgId(req);
   const { status } = req.query as Record<string, string | undefined>;
 
-  const where: any = { organizationId: orgId };
+  const where: any = { ...paperListScope(req) };
   if (status) where.status = status;
 
   const [papers, total] = await Promise.all([
@@ -148,10 +176,9 @@ export const getPaperById = async (req: Request, res: Response): Promise<void> =
 
 export const deletePaper = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
-  const orgId = requireRequestOrgId(req);
 
   const existing = await prisma.generatedPaper.findFirst({
-    where: { id, organizationId: orgId },
+    where: { id, ...paperListScope(req) },
   });
   if (!existing) throw ApiError.notFound('Paper not found');
 
@@ -162,10 +189,9 @@ export const deletePaper = async (req: Request, res: Response): Promise<void> =>
 
 export const publishPaper = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
-  const orgId = requireRequestOrgId(req);
 
   const existing = await prisma.generatedPaper.findFirst({
-    where: { id, organizationId: orgId },
+    where: { id, ...paperListScope(req) },
   });
   if (!existing) throw ApiError.notFound('Paper not found');
 
@@ -179,10 +205,9 @@ export const publishPaper = async (req: Request, res: Response): Promise<void> =
 
 export const archivePaper = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
-  const orgId = requireRequestOrgId(req);
 
   const existing = await prisma.generatedPaper.findFirst({
-    where: { id, organizationId: orgId },
+    where: { id, ...paperListScope(req) },
   });
   if (!existing) throw ApiError.notFound('Paper not found');
 

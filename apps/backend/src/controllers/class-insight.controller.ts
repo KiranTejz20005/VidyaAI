@@ -4,7 +4,11 @@ import { sendSuccess, sendError } from '../utils/api-response.util';
 import prisma from '../config/prisma';
 
 export const getAssignedClasses = async (req: Request, res: Response): Promise<void> => {
-  const userId = req.user?.id ?? 'demo-faculty-id';
+  const userId = req.user?.id;
+  if (!userId) {
+    sendError(res, 401, 'Authentication required', { errorCode: 'UNAUTHORIZED' });
+    return;
+  }
   const organizationId = req.user?.activeOrganizationId ?? req.user?.organizationId ?? '';
 
   const classes = await ClassInsightService.getAssignedClasses(organizationId, userId);
@@ -13,7 +17,11 @@ export const getAssignedClasses = async (req: Request, res: Response): Promise<v
 
 export const getDashboardInsights = async (req: Request, res: Response): Promise<void> => {
   const { classId } = req.query;
-  const userId = req.user?.id ?? 'demo-faculty-id';
+  const userId = req.user?.id;
+  if (!userId) {
+    sendError(res, 401, 'Authentication required', { errorCode: 'UNAUTHORIZED' });
+    return;
+  }
   const organizationId = req.user?.activeOrganizationId ?? req.user?.organizationId ?? '';
 
   if (!classId || typeof classId !== 'string') {
@@ -35,7 +43,11 @@ export const getDashboardInsights = async (req: Request, res: Response): Promise
  */
 export const generateProactiveInsights = async (req: Request, res: Response): Promise<void> => {
   const { subject } = req.body;
-  const userId = req.user?.id ?? 'demo-faculty-id';
+  const userId = req.user?.id;
+  if (!userId) {
+    sendError(res, 401, 'Authentication required', { errorCode: 'UNAUTHORIZED' });
+    return;
+  }
   const organizationId = req.user?.activeOrganizationId ?? req.user?.organizationId ?? '';
 
   if (!subject) {

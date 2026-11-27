@@ -1,6 +1,39 @@
 import prisma from '../config/prisma';
+import { NotFoundError } from '../api/common/errors';
+import { CommunityService } from './community.service';
+
+/** Prisma fragment confining a query to the caller's tenant (empty only for a platform-wide SUPER_ADMIN). */
+export type ChatOrgScope = { organizationId?: string };
+
+/**
+ * Direct-message conversation ids are `dm_<userIdA>_<userIdB>`. Returns the two
+ * participants, or null when the id is not a (well-formed) DM id.
+ */
+export function parseDmParticipants(conversationId: string): [string, string] | null {
+  if (typeof conversationId !== 'string' || !conversationId.startsWith('dm_')) return null;
+  const parts = conversationId.slice(3).split('_');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
+  return [parts[0], parts[1]];
+}
 
 export class ChatService {
+  /**
+   * Verifies the user may read/write a conversation. A DM is limited to its two
+   * participants; any other conversation id is a group and follows group access
+   * rules. Anything else is reported as missing (404), never as forbidden.
+   */
+  static async assertConversationAccess(conversationId: string, userId: string): Promise<void> {
+    if (typeof conversationId === 'string' && conversationId.startsWith('dm_')) {
+      const participants = parseDmParticipants(conversationId);
+      if (!participants || !participants.includes(userId)) {
+        throw new NotFoundError('Conversation not found');
+      }
+      return;
+    }
+    const allowed = await CommunityService.canAccessGroup(conversationId, userId);
+    if (!allowed) throw new NotFoundError('Conversation not found');
+  }
+
   /**
    * Save a message to the database
    */
@@ -8,8 +41,22 @@ export class ChatService {
     conversationId: string,
     senderId: string,
     message: string,
-    attachments: any[] = []
+    attachments: any[] = [],
+    scope: ChatOrgScope = {}
   ) {
+    await ChatService.assertConversationAccess(conversationId, senderId);
+
+    // A DM may only be addressed to a user of the sender's own organization.
+    const participants = parseDmParticipants(conversationId);
+    if (participants && scope.organizationId) {
+      const recipientId = participants[0] === senderId ? participants[1] : participants[0];
+      const recipient = await prisma.user.findFirst({
+        where: { id: recipientId, organizationId: scope.organizationId },
+        select: { id: true },
+      });
+      if (!recipient) throw new NotFoundError('Conversation not found');
+    }
+
     return prisma.message.create({
       data: {
         conversationId,
@@ -26,7 +73,8 @@ export class ChatService {
   /**
    * Fetch chat history for a conversation
    */
-  static async getMessages(conversationId: string, limit: number = 50, cursor?: string) {
+  static async getMessages(conversationId: string, userId: string, limit: number = 50, cursor?: string) {
+    await ChatService.assertConversationAccess(conversationId, userId);
     return prisma.message.findMany({
       where: { conversationId },
       take: limit,
@@ -42,26 +90,8 @@ export class ChatService {
    * Get all users in the same organization, excluding the current user
    */
   static async getOrgUsers(organizationId: string | null, currentUserId: string) {
-    if (!organizationId) {
-      // In development, if organizationId is not set, return all other active users
-      return prisma.user.findMany({
-        where: {
-          id: { not: currentUserId },
-          status: 'ACTIVE',
-        },
-        select: {
-          id: true,
-          firstName: true,
-          lastName: true,
-          email: true,
-          role: true,
-        },
-        orderBy: [
-          { firstName: 'asc' },
-          { lastName: 'asc' },
-        ],
-      });
-    }
+    // Never fall back to listing users across organizations.
+    if (!organizationId) return [];
 
     return prisma.user.findMany({
       where: {

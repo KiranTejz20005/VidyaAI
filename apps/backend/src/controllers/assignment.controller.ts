@@ -9,7 +9,7 @@ import {
 import { sendSuccess, sendError } from '../utils/api-response';
 import { emitToAssignment } from '../sockets/socket.server';
 
-import { isFacultyRole } from '../security/request-context';
+import { isFacultyRole, isStudentRole } from '../security/request-context';
 import type { FileRef } from '../types/assignment.types';
 import prisma from '../config/prisma';
 import { logger } from '../utils/logger';
@@ -253,7 +253,9 @@ export async function listAssignmentsHandler(req: Request, res: Response): Promi
       : undefined;
 
   const listFilter = assignmentListFilter(req);
-  const result = await listAssignments(page, limit, status, listFilter.organizationId, listFilter.createdById);
+  // Students never see unpublished (draft / in-review) assignments, matching getAssignmentHandler.
+  const statusIn = isStudentRole(req.user?.role) ? [...PUBLISHED_STATUSES] : undefined;
+  const result = await listAssignments(page, limit, status, listFilter.organizationId, listFilter.createdById, statusIn);
 
   res.status(200).json({
     success: true,
@@ -345,6 +347,7 @@ import {
   assertCanViewAssignment,
   assignmentListFilter,
   handleAccessError,
+  PUBLISHED_STATUSES,
 } from '../security/assignment-access';
 
 export async function submitAssignmentForApproval(req: Request, res: Response): Promise<void> {

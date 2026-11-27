@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import prisma from '../config/prisma';
+import { isStudentRole } from '../security/request-context';
 
 export const createAssessment = async (req: Request, res: Response) => {
   try {
@@ -34,6 +35,8 @@ export const getAssessments = async (req: Request, res: Response) => {
     const whereClause: any = {};
     if (subjectId) whereClause.subjectId = subjectId;
     if (organizationId) whereClause.organizationId = organizationId;
+    // Students never see unreleased drafts.
+    if (isStudentRole(req.user?.role)) whereClause.status = { not: 'DRAFT' };
 
     const assessments = await prisma.assessment.findMany({
       where: whereClause,

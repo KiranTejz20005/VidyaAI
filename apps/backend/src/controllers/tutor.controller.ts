@@ -92,9 +92,7 @@ export const chat = async (req: Request, res: Response): Promise<void> => {
   const reply = await AITutorService.chat(sessionId, studentId, organizationId, message, mode);
 
   // Update streak!
-  if (studentId !== 'demo-faculty-id') {
-    await StreakService.recordActivity(studentId);
-  }
+  await StreakService.recordActivity(studentId);
 
   // If this was the first user message and title is "New Chat", we should really generate one...
   // but for now, we just rely on rename APIs.

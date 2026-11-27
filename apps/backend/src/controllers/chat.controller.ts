@@ -1,12 +1,13 @@
 import { Request, Response } from 'express';
 import { ChatService } from '../services/chat.service';
+import { tenantScope } from '../security/tenant-scope';
 
 export const getMessages = async (req: Request, res: Response): Promise<void> => {
   const conversationId = req.params.conversationId;
   const limit = parseInt(req.query.limit as string) || 100;
   const cursor = req.query.cursor as string;
 
-  const messages = await ChatService.getMessages(conversationId, limit, cursor);
+  const messages = await ChatService.getMessages(conversationId, req.user!.id, limit, cursor);
   res.status(200).json({ status: 'success', data: messages });
 };
 
@@ -51,6 +52,6 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
     return;
   }
 
-  const saved = await ChatService.saveMessage(conversationId, userId, message, attachments || []);
+  const saved = await ChatService.saveMessage(conversationId, userId, message, attachments || [], tenantScope(req));
   res.status(200).json({ status: 'success', data: saved });
 };

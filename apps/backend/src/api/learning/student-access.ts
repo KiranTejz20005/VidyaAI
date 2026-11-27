@@ -62,3 +62,46 @@ export async function assertStudentAccess(req: Request, studentId: string): Prom
 
   if (!studentUser && !rosterStudent) throw new NotFoundError('Student not found');
 }
+
+/**
+ * Called by `api/learning/controller.ts` getProfile / getStudyPlans.
+ * No other helper maps User.id → roster Student.id for learning profiles.
+ * Reads: Prisma `User`, `Student` (+ ClassGroup org). Writes: none.
+ * User instruction: "find the root cause and fix it" for learning profile 404.
+ */
+export async function resolveRosterStudentId(req: Request, studentId: string): Promise<string | null> {
+  const orgId = getRequestOrgId(req);
+
+  const byRosterId = await prisma.student.findFirst({
+    where: {
+      id: studentId,
+      ...(orgId ? { group: { organizationId: orgId } } : {}),
+    },
+    select: { id: true },
+  });
+  if (byRosterId) return byRosterId.id;
+
+  const user = await prisma.user.findFirst({
+    where: {
+      id: studentId,
+      role: 'STUDENT',
+      ...(orgId ? { organizationId: orgId } : {}),
+    },
+    select: { id: true, email: true, organizationId: true },
+  });
+  if (!user?.email) return null;
+
+  const scopedOrg = orgId ?? user.organizationId;
+  if (!scopedOrg) return null;
+
+  const byEmail = await prisma.student.findFirst({
+    where: {
+      email: { equals: user.email, mode: 'insensitive' },
+      group: { organizationId: scopedOrg },
+      isActive: true,
+    },
+    select: { id: true },
+    orderBy: { joinedAt: 'desc' },
+  });
+  return byEmail?.id ?? null;
+}

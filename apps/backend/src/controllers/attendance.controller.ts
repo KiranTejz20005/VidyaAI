@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import prisma from '../config/prisma';
 import { logger } from '../utils/logger';
-import { requireRequestOrgId, getRequestUserId } from '../security/request-context';
+import { requireRequestOrgId, getRequestUserId, isStudentRole } from '../security/request-context';
 import { z } from 'zod';
 
 const markAttendanceSchema = z.object({
@@ -40,6 +40,14 @@ export const markAttendance = async (req: Request, res: Response): Promise<void>
     
     // override the classId to the valid one
     const validClassId = classRec.id;
+
+    // Every student must belong to the caller's organization.
+    const studentIds = Array.from(new Set(parsed.attendance.map((r) => r.studentId)));
+    const inOrg = await prisma.user.count({ where: { id: { in: studentIds }, organizationId: orgId } });
+    if (inOrg !== studentIds.length) {
+      res.status(404).json({ success: false, error: 'Student not found' });
+      return;
+    }
 
     // Process attendance updates in a transaction
     const results = await prisma.$transaction(
@@ -111,7 +119,11 @@ export const getStudentAttendance = async (req: Request, res: Response): Promise
     const studentId = getRequestUserId(req);
     
     // Allow teacher to request specific student's attendance if query param provided
-    const targetStudentId = req.query.studentId ? String(req.query.studentId) : studentId;
+    // Students may only read their own attendance; staff may read any student of their organization
+    // (the query below is always confined to the caller's organization).
+    const targetStudentId = req.query.studentId && !isStudentRole(req.user?.role)
+      ? String(req.query.studentId)
+      : studentId;
 
     const monthStr = req.query.month as string;
     const yearStr = req.query.year as string;
@@ -302,8 +314,18 @@ export const updateLeaveStatus = async (req: Request, res: Response): Promise<vo
       return;
     }
 
+    const orgId = requireRequestOrgId(req);
+    const existing = await prisma.leaveApplication.findFirst({
+      where: { id, organizationId: orgId },
+      select: { id: true },
+    });
+    if (!existing) {
+      res.status(404).json({ success: false, error: 'Leave application not found' });
+      return;
+    }
+
     const updated = await prisma.leaveApplication.update({
-      where: { id },
+      where: { id: existing.id },
       data: { status },
     });
 

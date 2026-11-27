@@ -1,12 +1,26 @@
 import { Request, Response } from 'express';
 import prisma from '../config/prisma';
+import { normalizeRole } from '../security/request-context';
 
 export const exportAssessmentPdf = async (req: Request, res: Response) => {
   try {
     const { assessmentId } = req.params;
     
-    const assessment = await prisma.assessment.findUnique({
-      where: { id: assessmentId },
+    const user = req.user;
+    if (!user) {
+      res.status(401).json({ success: false, error: 'Authentication required' });
+      return;
+    }
+    const role = normalizeRole(user.role);
+    // Tenant scope always applies except for SUPER_ADMIN; TEACHERs only see their own.
+    const scope: Record<string, string> = {};
+    if (role !== 'SUPER_ADMIN') {
+      scope.organizationId = user.activeOrganizationId || user.organizationId || '';
+      if (role === 'TEACHER') scope.authorId = user.id;
+    }
+
+    const assessment = await prisma.assessment.findFirst({
+      where: { id: assessmentId, ...scope },
       include: {
         questions: {
           include: { question: true }

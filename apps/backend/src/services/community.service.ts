@@ -1,4 +1,21 @@
 import prisma from '../config/prisma';
+import { NotFoundError } from '../api/common/errors';
+
+type PostLike = { authorId: string; visibility: string; organizationId: string | null };
+
+/**
+ * A post is readable by its author, by anyone when PUBLIC, and by members of its
+ * own organization when ORG_ONLY. PRIVATE posts are author-only. Anything else
+ * (including a post of another tenant) must be reported as missing.
+ */
+export function canViewPost(post: PostLike, userId: string, organizationId?: string): boolean {
+  if (post.authorId === userId) return true;
+  if (post.visibility === 'PUBLIC') return true;
+  if (post.visibility === 'ORG_ONLY') {
+    return Boolean(post.organizationId) && post.organizationId === organizationId;
+  }
+  return false;
+}
 
 
 export class CommunityService {
@@ -31,7 +48,8 @@ export class CommunityService {
           // Public and invite-only groups in the organization
           {
             type: { in: ['PUBLIC', 'INVITE_ONLY'] },
-            ...(validOrgId ? { organizationId: validOrgId } : {}),
+            // Without a valid organization only org-less groups qualify; never every tenant's groups.
+            organizationId: validOrgId ?? null,
           },
           // Private groups the user is already a member of
           {
@@ -128,7 +146,8 @@ export class CommunityService {
   }
 
   /**
-   * Create a community group
+   * Create a community group. Called by community.controller createGroup.
+   * Writes CommunityGroup + GroupMember. Phase 3: require organizationId.
    */
   static async createGroup(
     ownerId: string,
@@ -138,6 +157,9 @@ export class CommunityService {
     organizationId?: string
   ) {
     const validOrgId = await CommunityService.getValidOrgId(organizationId);
+    if (!validOrgId) {
+      throw new Error('Organization is required to create a community group.');
+    }
     return prisma.communityGroup.create({
       data: {
         name,
@@ -158,9 +180,13 @@ export class CommunityService {
   /**
    * Join a community group
    */
-  static async joinGroup(groupId: string, userId: string) {
+  static async joinGroup(groupId: string, userId: string, organizationId?: string) {
+    const validOrgId = await CommunityService.getValidOrgId(organizationId);
     const group = await prisma.communityGroup.findUnique({ where: { id: groupId } });
-    if (!group) throw new Error('Group not found');
+    // Fail closed: org-less legacy groups are not joinable across tenants.
+    if (!group || !group.organizationId || !validOrgId || group.organizationId !== validOrgId) {
+      throw new NotFoundError('Group not found');
+    }
     if (group.type === 'INVITE_ONLY' || group.type === 'PRIVATE') {
       throw new Error('This group requires an invitation to join.');
     }
@@ -187,8 +213,11 @@ export class CommunityService {
   /**
    * Search for users to invite to a group
    */
-  static async searchUsers(query: string, excludeGroupId?: string) {
-    const whereClause: any = {};
+  static async searchUsers(query: string, excludeGroupId?: string, organizationId?: string) {
+    // Users are only discoverable inside the caller's own organization.
+    const validOrgId = await CommunityService.getValidOrgId(organizationId);
+    if (!validOrgId) return [];
+    const whereClause: any = { organizationId: validOrgId };
     if (query && query.length >= 2) {
       whereClause.OR = [
         { firstName: { contains: query, mode: 'insensitive' } },
@@ -200,6 +229,7 @@ export class CommunityService {
     const users = await prisma.user.findMany({
       where: {
         ...whereClause,
+        status: 'ACTIVE',
         ...(excludeGroupId ? {
           NOT: {
             groupMemberships: {
@@ -228,14 +258,17 @@ export class CommunityService {
     const group = await prisma.communityGroup.findUnique({ where: { id: groupId } });
     if (!group) throw new Error('Group not found');
     if (group.ownerId !== ownerId) throw new Error('Only the group owner can invite members');
+    // Fail closed: never invite into org-less groups (would resolve users globally).
+    if (!group.organizationId) throw new Error('Group not found');
 
-    // Find the user to invite (by email or ID)
+    // Find the user to invite (by email or ID) — only within the group's own organization
     const userToInvite = await prisma.user.findFirst({
       where: {
         OR: [
           { email: inviteeIdentifier },
           { id: inviteeIdentifier }
-        ]
+        ],
+        organizationId: group.organizationId,
       }
     });
 
@@ -260,7 +293,10 @@ export class CommunityService {
     });
   }
 
-  static async getGroupMembers(groupId: string, _userId?: string) {
+  static async getGroupMembers(groupId: string, userId: string) {
+    const hasAccess = await this.checkGroupAccess(groupId, userId);
+    if (!hasAccess) throw new NotFoundError('Group not found');
+
     const members = await prisma.groupMember.findMany({
       where: { groupId },
       include: {
@@ -317,7 +353,21 @@ export class CommunityService {
 
   // --- New Methods for Posts ---
 
-  static async getPost(postId: string) {
+  /**
+   * Loads a post only when the viewer may see it (see canViewPost). Throws 404
+   * for missing and out-of-scope posts alike.
+   */
+  private static async requireViewablePost(postId: string, userId: string, organizationId?: string) {
+    const post = await prisma.communityPost.findUnique({
+      where: { id: postId },
+      select: { id: true, authorId: true, visibility: true, organizationId: true },
+    });
+    if (!post || !canViewPost(post, userId, organizationId)) throw new NotFoundError('Post not found');
+    return post;
+  }
+
+  static async getPost(postId: string, userId: string, organizationId?: string) {
+    await CommunityService.requireViewablePost(postId, userId, organizationId);
     return prisma.communityPost.findUnique({
       where: { id: postId },
       include: {
@@ -334,8 +384,7 @@ export class CommunityService {
 
   static async updatePost(postId: string, userId: string, data: { title?: string, content?: string, status?: string }) {
     const post = await prisma.communityPost.findUnique({ where: { id: postId } });
-    if (!post) throw new Error('Post not found');
-    if (post.authorId !== userId) throw new Error('Unauthorized');
+    if (!post || post.authorId !== userId) throw new NotFoundError('Post not found');
     return prisma.communityPost.update({
       where: { id: postId },
       data
@@ -344,14 +393,14 @@ export class CommunityService {
 
   static async deletePost(postId: string, userId: string) {
     const post = await prisma.communityPost.findUnique({ where: { id: postId } });
-    if (!post) throw new Error('Post not found');
-    if (post.authorId !== userId) throw new Error('Unauthorized');
+    if (!post || post.authorId !== userId) throw new NotFoundError('Post not found');
     return prisma.communityPost.delete({ where: { id: postId } });
   }
 
   // --- Comments ---
 
-  static async getComments(postId: string) {
+  static async getComments(postId: string, userId: string, organizationId?: string) {
+    await CommunityService.requireViewablePost(postId, userId, organizationId);
     return prisma.communityComment.findMany({
       where: { postId },
       orderBy: { createdAt: 'asc' },
@@ -361,7 +410,8 @@ export class CommunityService {
     });
   }
 
-  static async addComment(postId: string, authorId: string, content: string) {
+  static async addComment(postId: string, authorId: string, content: string, organizationId?: string) {
+    await CommunityService.requireViewablePost(postId, authorId, organizationId);
     const comment = await prisma.communityComment.create({
       data: {
         postId,
@@ -384,7 +434,8 @@ export class CommunityService {
 
   // --- Save / Bookmark ---
 
-  static async toggleSavePost(postId: string, userId: string) {
+  static async toggleSavePost(postId: string, userId: string, organizationId?: string) {
+    await CommunityService.requireViewablePost(postId, userId, organizationId);
     const existing = await prisma.savedPost.findUnique({
       where: {
         userId_postId: { userId, postId }
@@ -407,29 +458,45 @@ export class CommunityService {
   // --- New Methods for Group Chat ---
 
   private static async checkGroupAccess(groupId: string, userId: string) {
-    // Validate if the user is a member of the group
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true, role: true, organizationId: true },
+    });
+    if (!user) return false;
+    const isSuper = String(user.role).toUpperCase() === 'SUPER_ADMIN';
+    // Fail closed: org-less groups are not same-tenant for non-members.
+    const sameTenant = (groupOrgId: string | null | undefined) =>
+      Boolean(groupOrgId) && (isSuper || groupOrgId === user.organizationId);
+
+    // Existing members keep access (including legacy org-less memberships).
     const membership = await prisma.groupMember.findUnique({
       where: { groupId_userId: { groupId, userId } }
     });
     if (membership) return true;
 
     const group = await prisma.communityGroup.findUnique({ where: { id: groupId } });
-    if (group && (group.type !== 'PRIVATE' || group.ownerId === userId)) return true;
+    if (group) {
+      if (group.ownerId === userId) return true;
+      // Non-members may only enter open (PUBLIC) groups of their own organization.
+      if (group.type === 'PUBLIC' && sameTenant(group.organizationId)) return true;
+    }
 
     // Check if it's an academic group and user is faculty or student
     const academicGroup = await prisma.group.findUnique({ where: { id: groupId } });
-    if (academicGroup) {
+    if (academicGroup && sameTenant(academicGroup.organizationId)) {
       if (academicGroup.facultyId === userId) return true;
-      const user = await prisma.user.findUnique({ where: { id: userId } });
-      if (user) {
-        const student = await prisma.groupStudent.findFirst({
-          where: { groupId, email: user.email }
-        });
-        if (student) return true;
-      }
+      const student = await prisma.groupStudent.findFirst({
+        where: { groupId, email: user.email }
+      });
+      if (student) return true;
     }
 
     return false;
+  }
+
+  /** Public membership/tenant check shared with the REST chat endpoints. */
+  static async canAccessGroup(groupId: string, userId: string): Promise<boolean> {
+    return Boolean(await this.checkGroupAccess(groupId, userId));
   }
 
   static async getGroupMessages(groupId: string, userId: string, limit = 50, cursor?: string) {
@@ -472,8 +539,10 @@ export class CommunityService {
 
   static async getTopContributors(organizationId?: string, limit = 5) {
     const validOrgId = await CommunityService.getValidOrgId(organizationId);
+    // No organization means no leaderboard, never every tenant's users.
+    if (!validOrgId) return [];
     const users = await prisma.user.findMany({
-      where: validOrgId ? { organizationId: validOrgId } : {},
+      where: { organizationId: validOrgId },
       include: {
         _count: {
           select: { communityPosts: true, communityComments: true }
