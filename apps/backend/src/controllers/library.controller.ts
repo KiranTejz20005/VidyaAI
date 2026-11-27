@@ -5,6 +5,19 @@ import path from 'path';
 import { getR2Storage } from '../services/storage/r2-storage';
 import { generateR2ObjectKey } from '../services/storage/key-generator';
 import { logger } from '../utils/logger';
+import { isSuperAdmin, requireRequestOrgId } from '../security/request-context';
+
+/**
+ * Tenant filter for by-id access to a library resource. A SUPER_ADMIN without a
+ * selected organization is platform-wide; everyone else is confined to their own.
+ */
+function libraryOrgScope(req: Request): { organizationId?: string } {
+  if (isSuperAdmin(req.user?.role)) {
+    const selected = req.user?.activeOrganizationId;
+    return selected ? { organizationId: selected } : {};
+  }
+  return { organizationId: requireRequestOrgId(req) };
+}
 
 async function resolveOrgId(req: Request): Promise<string> {
   const reqOrgId = req.user?.activeOrganizationId || req.user?.organizationId;
@@ -346,9 +359,9 @@ export const updateResource = async (req: Request, res: Response): Promise<void>
 
     const { title, description, resourceType, subject, className } = req.body;
 
-    const existing = await prisma.libraryResource.findUnique({ where: { id } });
-    if (!existing || existing.uploadedById !== userId) {
-      res.status(403).json({ success: false, error: 'Resource not found or unauthorized' });
+    const existing = await prisma.libraryResource.findFirst({ where: { id, uploadedById: userId, ...libraryOrgScope(req) } });
+    if (!existing) {
+      res.status(404).json({ success: false, error: 'Resource not found' });
       return;
     }
 
@@ -379,9 +392,9 @@ export const deleteResource = async (req: Request, res: Response): Promise<void>
       return;
     }
 
-    const existing = await prisma.libraryResource.findUnique({ where: { id } });
-    if (!existing || existing.uploadedById !== userId) {
-      res.status(403).json({ success: false, error: 'Resource not found or unauthorized' });
+    const existing = await prisma.libraryResource.findFirst({ where: { id, uploadedById: userId, ...libraryOrgScope(req) } });
+    if (!existing) {
+      res.status(404).json({ success: false, error: 'Resource not found' });
       return;
     }
 
@@ -416,7 +429,7 @@ export const downloadResource = async (req: Request, res: Response): Promise<voi
   try {
     const { id } = req.params;
 
-    const resource = await prisma.libraryResource.findUnique({ where: { id } });
+    const resource = await prisma.libraryResource.findFirst({ where: { id, ...libraryOrgScope(req) } });
 
     if (!resource || !resource.fileUrl) {
       res.status(404).json({ success: false, error: 'Resource not found' });
@@ -462,7 +475,7 @@ export const viewResource = async (req: Request, res: Response): Promise<void> =
   try {
     const { id } = req.params;
 
-    const resource = await prisma.libraryResource.findUnique({ where: { id } });
+    const resource = await prisma.libraryResource.findFirst({ where: { id, ...libraryOrgScope(req) } });
 
     if (!resource || !resource.fileUrl) {
       res.status(404).json({ success: false, error: 'Resource not found' });

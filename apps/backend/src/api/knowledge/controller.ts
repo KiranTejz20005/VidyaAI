@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import prisma from '../../config/prisma';
-import { requireRequestOrgId } from '../../security/request-context';
+import { requireRequestOrgId, orgScope } from '../../security/request-context';
 import { parsePagination, buildPagination } from '../common/pagination';
 import { sendSuccess, sendAccepted } from '../common/response';
 import { ApiError } from '../common/errors';
@@ -43,7 +43,7 @@ export async function getQualityScores(req: Request, res: Response): Promise<voi
 export async function getDocumentQuality(req: Request, res: Response): Promise<void> {
   const { documentId } = req.params;
 
-  const document = await prisma.knowledgeDocument.findUnique({ where: { id: documentId } });
+  const document = await prisma.knowledgeDocument.findFirst({ where: { id: documentId, ...orgScope(req) } });
   if (!document) throw ApiError.notFound('Document not found');
 
   const chunks = await prisma.knowledgeChunk.findMany({
@@ -62,8 +62,9 @@ export async function getDocumentQuality(req: Request, res: Response): Promise<v
 }
 
 export async function triggerEvaluation(req: Request, res: Response): Promise<void> {
-  const { documentId, organizationId } = req.body;
-  const orgId = organizationId || requireRequestOrgId(req);
+  // The tenant always comes from the access token; a body-supplied organizationId is ignored.
+  const { documentId } = req.body;
+  const orgId = requireRequestOrgId(req);
 
   const where: any = {};
   if (documentId) where.documentId = documentId;
@@ -84,7 +85,7 @@ export async function triggerEvaluation(req: Request, res: Response): Promise<vo
 export async function checkEvaluationJob(req: Request, res: Response): Promise<void> {
   const { jobId } = req.params;
 
-  const job = await prisma.generationJob.findUnique({ where: { id: jobId } });
+  const job = await prisma.generationJob.findFirst({ where: { id: jobId, ...orgScope(req) } });
   if (!job) throw ApiError.notFound('Evaluation job not found');
 
   sendSuccess(res, { data: serializeEvaluationJob(job) });
@@ -93,7 +94,7 @@ export async function checkEvaluationJob(req: Request, res: Response): Promise<v
 export async function getChunkQuality(req: Request, res: Response): Promise<void> {
   const { chunkId } = req.params;
 
-  const chunk = await prisma.knowledgeChunk.findUnique({ where: { id: chunkId } });
+  const chunk = await prisma.knowledgeChunk.findFirst({ where: { id: chunkId, document: { ...orgScope(req) } } });
   if (!chunk) throw ApiError.notFound('Chunk not found');
 
   const quality = await prisma.chunkQualityMetrics.findUnique({ where: { chunkId } });

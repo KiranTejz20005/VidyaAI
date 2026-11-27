@@ -2,6 +2,9 @@ import { AccessToken } from 'livekit-server-sdk';
 import prisma from '../config/prisma';
 import { logger } from '../utils/logger';
 
+/** Prisma fragment confining a query to the caller's tenant (empty only for a platform-wide SUPER_ADMIN). */
+export type VoiceOrgScope = { organizationId?: string };
+
 export class VoiceService {
   static async createVoiceRoom(name: string, type: string, createdById: string, organizationId?: string) {
     try {
@@ -20,12 +23,12 @@ export class VoiceService {
     }
   }
 
-  static async getActiveRooms(organizationId?: string) {
+  static async getActiveRooms(scope: VoiceOrgScope) {
     try {
       const rooms = await prisma.voiceRoom.findMany({
         where: {
           isActive: true,
-          ...(organizationId && { organizationId }),
+          ...scope,
         },
         include: {
           createdBy: { select: { id: true, firstName: true, lastName: true } },
@@ -59,10 +62,24 @@ export class VoiceService {
     }
   }
 
-  static async joinRoom(roomId: string, userId: string) {
+  /**
+   * Resolves the active room a LiveKit token may be issued for. Rooms are looked
+   * up inside the caller's tenant only, so a room name from another organization
+   * is indistinguishable from a missing one.
+   */
+  static async findActiveRoomByName(roomName: string, scope: VoiceOrgScope) {
+    const room = await prisma.voiceRoom.findFirst({
+      where: { name: roomName, isActive: true, ...scope },
+      select: { id: true, name: true },
+    });
+    if (!room) throw new Error('Room not found');
+    return room;
+  }
+
+  static async joinRoom(roomId: string, userId: string, scope: VoiceOrgScope) {
     try {
-      // Verify room exists and is active
-      const room = await prisma.voiceRoom.findUnique({ where: { id: roomId } });
+      // Verify room exists in the caller's tenant and is active
+      const room = await prisma.voiceRoom.findFirst({ where: { id: roomId, ...scope } });
       if (!room) throw new Error('Room not found');
       if (!room.isActive) throw new Error('Room is no longer active');
 
@@ -78,10 +95,10 @@ export class VoiceService {
     }
   }
 
-  static async leaveRoom(roomId: string, userId: string) {
+  static async leaveRoom(roomId: string, userId: string, scope: VoiceOrgScope) {
     try {
       return prisma.voiceRoomParticipant.updateMany({
-        where: { roomId, userId, leftAt: null },
+        where: { roomId, userId, leftAt: null, room: { ...scope } },
         data: { leftAt: new Date() },
       });
     } catch (err: any) {
@@ -90,10 +107,10 @@ export class VoiceService {
     }
   }
 
-  static async closeRoom(roomId: string, userId: string) {
+  static async closeRoom(roomId: string, userId: string, scope: VoiceOrgScope) {
     try {
-      // Mark room inactive — only the creator can close
-      const room = await prisma.voiceRoom.findUnique({ where: { id: roomId } });
+      // Mark room inactive — only the creator can close, and only inside their tenant
+      const room = await prisma.voiceRoom.findFirst({ where: { id: roomId, ...scope } });
       if (!room) throw new Error('Room not found');
       if (room.createdById !== userId) throw new Error('Only the creator can close a room');
       return prisma.voiceRoom.update({

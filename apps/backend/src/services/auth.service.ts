@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import argon2 from 'argon2';
 import crypto from 'crypto';
+import { Prisma } from '@prisma/client';
 import prisma from '../config/prisma';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
@@ -322,4 +323,63 @@ export async function pruneExpiredAuthArtifacts(): Promise<void> {
   });
   await prisma.passwordResetToken.deleteMany({ where: { expiresAt: { lt: now } } });
   await prisma.session.deleteMany({ where: { expiresAt: { lt: now } } });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Personal workspace provisioning
+// ─────────────────────────────────────────────────────────────────────────────
+
+function personalOrganizationFor(userId: string, email: string, firstName?: string | null) {
+  const label = (firstName || email.split('@')[0] || 'My').trim();
+  return {
+    name: `${label}'s Workspace`.slice(0, 120),
+    code: `P${userId.replace(/-/g, '').slice(0, 10).toUpperCase()}`,
+    email,
+  };
+}
+
+type UserCreateData = Omit<Prisma.UserUncheckedCreateInput, 'id' | 'organizationId' | 'activeOrganizationId'>;
+
+/**
+ * Creates a self-service user together with an isolated personal workspace in one
+ * transaction, so a user can never be left without a tenant (or a tenant without
+ * its owner) if either insert fails. The workspace is never shared with anyone.
+ */
+export async function createUserWithPersonalOrganization(data: UserCreateData) {
+  const userId = crypto.randomUUID();
+  return prisma.$transaction(async (tx) => {
+    const org = await tx.organization.create({ data: personalOrganizationFor(userId, data.email, data.firstName) });
+    return tx.user.create({
+      data: { ...data, id: userId, organizationId: org.id, activeOrganizationId: org.id },
+    });
+  });
+}
+
+/**
+ * Provisions a personal workspace for an existing org-less, non-super-admin user.
+ * Atomic and idempotent: the membership update only applies while the user is still
+ * org-less, otherwise the transaction rolls back and the current row is returned.
+ */
+export async function ensurePersonalOrganization<
+  U extends { id: string; email: string; role: string; firstName?: string | null; organizationId: string | null; activeOrganizationId: string | null },
+>(user: U): Promise<{ user: U; created: boolean }> {
+  if (user.organizationId || user.role === 'SUPER_ADMIN') return { user, created: false };
+  const created = await prisma.$transaction(async (tx) => {
+    const org = await tx.organization.create({ data: personalOrganizationFor(user.id, user.email, user.firstName) });
+    const claimed = await tx.user.updateMany({
+      where: { id: user.id, organizationId: null },
+      data: { organizationId: org.id, activeOrganizationId: org.id },
+    });
+    if (claimed.count !== 1) throw new AuthError(409, 'Workspace already provisioned', 'CONFLICT');
+    return org.id;
+  }).catch(async (err) => {
+    if (err instanceof AuthError || (err as { code?: string })?.code === 'P2002') {
+      const fresh = await prisma.user.findUnique({ where: { id: user.id }, select: { organizationId: true, activeOrganizationId: true } });
+      if (fresh?.organizationId) return fresh;
+    }
+    throw err;
+  });
+  const orgId = typeof created === 'string' ? created : created.organizationId;
+  const activeId = typeof created === 'string' ? created : created.activeOrganizationId;
+  return { user: { ...user, organizationId: orgId, activeOrganizationId: activeId }, created: typeof created === 'string' };
 }

@@ -9,7 +9,6 @@ import reviewRoutes from './review.routes';
 import assessmentRoutes from './assessment.routes';
 import analyticsRoutes from './analytics.routes';
 import exportRoutes from './export.routes';
-import authRoutes from './auth.routes';
 import groupRoutes from './group.routes';
 import generationRoutes from './generation.routes';
 import syllabusRoutes from './syllabus.routes';
@@ -85,7 +84,6 @@ apiRouter.use('/v1/analytics', analyticsRoutes);
 apiRouter.use('/v1/exports', exportRoutes);
 
 // Auth, groups, and generation
-apiRouter.use('/v1/auth', authRoutes);
 apiRouter.use('/v1/groups', groupRoutes);
 apiRouter.use('/v1/generate', generationRoutes);
 apiRouter.use('/v1/syllabus', syllabusRoutes);

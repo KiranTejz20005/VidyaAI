@@ -62,7 +62,7 @@ export const createGroup = async (req: Request, res: Response) => {
 
 export const joinGroup = async (req: Request, res: Response) => {
   const groupId = req.params.groupId;
-  const membership = await CommunityService.joinGroup(groupId, req.user!.id);
+  const membership = await CommunityService.joinGroup(groupId, req.user!.id, req.user!.organizationId ?? undefined);
   res.status(200).json({ status: 'success', data: membership });
 };
 
@@ -121,7 +121,7 @@ const addCommentSchema = z.object({
 });
 
 export const getPost = async (req: Request, res: Response) => {
-  const post = await CommunityService.getPost(req.params.id);
+  const post = await CommunityService.getPost(req.params.id, req.user!.id, req.user!.organizationId ?? undefined);
   if (!post) {
     res.status(404).json({ status: 'error', message: 'Post not found' });
     return;
@@ -149,18 +149,18 @@ export const kickMember = async (req: Request, res: Response) => {
 };
 
 export const getComments = async (req: Request, res: Response) => {
-  const comments = await CommunityService.getComments(req.params.id);
+  const comments = await CommunityService.getComments(req.params.id, req.user!.id, req.user!.organizationId ?? undefined);
   res.status(200).json({ status: 'success', data: comments });
 };
 
 export const addComment = async (req: Request, res: Response) => {
   const data = addCommentSchema.parse(req.body);
-  const comment = await CommunityService.addComment(req.params.id, req.user!.id, data.content);
+  const comment = await CommunityService.addComment(req.params.id, req.user!.id, data.content, req.user!.organizationId ?? undefined);
   res.status(201).json({ status: 'success', data: comment });
 };
 
 export const toggleSavePost = async (req: Request, res: Response) => {
-  const result = await CommunityService.toggleSavePost(req.params.id, req.user!.id);
+  const result = await CommunityService.toggleSavePost(req.params.id, req.user!.id, req.user!.organizationId ?? undefined);
   res.status(200).json({ status: 'success', data: result });
 };
 
@@ -168,7 +168,8 @@ export const searchUsers = async (req: Request, res: Response) => {
   const { q, excludeGroupId } = req.query;
   const users = await CommunityService.searchUsers(
     q as string, 
-    excludeGroupId as string | undefined
+    excludeGroupId as string | undefined,
+    req.user!.organizationId ?? undefined
   );
   res.json({ success: true, data: users });
 };

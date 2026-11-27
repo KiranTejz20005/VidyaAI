@@ -46,3 +46,13 @@ The platform relies on a permissions matrix mapping roles directly to allowed ca
   - `action`: Type of mutation (e.g. `INVITATION_ACCEPTED`, `CSV_IMPORTED`).
   - `userId`: Author of the mutation.
   - `ipAddress` & `userAgent`: Client metadata for threat intelligence.
+
+## 4. Rate limits, lockout, and Redis degraded mode (Phase 3)
+
+Supersedes: nothing prior in this file on Redis fail modes. Linked from: `docs/audits/phase-3-security-verification.md` §11. User instruction: implement Phase 3 plan (document Redis degraded mode).
+
+- **Login lockout** (`apps/backend/src/api/auth/lockout.ts`): failed attempts use an atomic Redis Lua script (INCR counter + SET lock). Dual-write to per-instance memory always runs. On Redis errors, `isLoginLocked` stays availability-first (memory + warn log) so a Redis blip does not lock every user; writes continue in memory only. Multi-instance outage therefore gives a per-instance budget, not a cluster-wide shared budget.
+- **Global / AI limiters** (`rate-limit.middleware.ts`): Redis errors return **503** (`RATE_LIMIT_UNAVAILABLE`) — fail closed.
+- **App-level express-rate-limit** (`app.ts`): uses `ResilientRedisStore` so counters survive Redis flaps via memory fallback per process.
+- **Trust proxy**: `app.set('trust proxy', 1)` assumes one reverse-proxy hop (Render). Do not raise hops without verifying the topology.
+- **Webhooks**: `/api/webhook` CSRF skip remains; there are no signed webhook handlers today. Do not add unsigned payment/webhook handlers without signature verification.

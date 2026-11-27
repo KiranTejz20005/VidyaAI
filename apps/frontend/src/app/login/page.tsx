@@ -1,25 +1,22 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { AnimatePresence, motion, useReducedMotion, type Variants } from 'framer-motion';
 import { useAuthStore } from '@/store/auth.store';
+import { getDashboardRoute, isOnboarded } from '@/utils/navigation';
 import toast from 'react-hot-toast';
 import {
   Mail,
   ArrowRight,
   RefreshCw,
-  KeyRound,
   AlertCircle,
   Lock,
   Eye,
   EyeOff,
 } from 'lucide-react';
 import { useGoogleLogin } from '@react-oauth/google';
-
-type AuthMethod = 'PASSWORD' | 'OTP';
-type AuthStep = 'CREDENTIALS' | 'OTP';
 
 const GoogleIcon = (props: React.SVGProps<SVGSVGElement>) => (
   <svg viewBox="0 0 24 24" width="1em" height="1em" {...props}>
@@ -43,16 +40,8 @@ const GoogleIcon = (props: React.SVGProps<SVGSVGElement>) => (
 );
 
 function resolveDashboardPath(user: { role?: string; hasCompletedOnboarding?: boolean; organizationId?: string | null; departmentId?: string | null } | null) {
-  const isOnboarded =
-    user?.hasCompletedOnboarding === true ||
-    !!(user?.organizationId && user?.departmentId);
-
-  let dashboardPath = '/student';
-  if (user?.role === 'TEACHER' || user?.role === 'FACULTY') dashboardPath = '/faculty';
-  if (user?.role === 'ADMIN') dashboardPath = '/admin';
-  if (user?.role === 'SUPER_ADMIN') dashboardPath = '/super-admin';
-
-  return isOnboarded ? dashboardPath : '/onboarding';
+  if (!user) return '/login';
+  return isOnboarded(user) ? getDashboardRoute(user.role || '') : '/onboarding';
 }
 
 const fieldClass =
@@ -67,35 +56,15 @@ const secondaryBtnClass =
 export default function LoginPage() {
   const router = useRouter();
   const reduceMotion = useReducedMotion();
-  const { login, signInWithOtp, verifyOtp } = useAuthStore();
+  const { login } = useAuthStore();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [authMethod, setAuthMethod] = useState<AuthMethod>('PASSWORD');
-  const [step, setStep] = useState<AuthStep>('CREDENTIALS');
-  const [otp, setOtp] = useState(['', '', '', '', '', '']);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [resendCooldown, setResendCooldown] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const otpInputsRef = useRef<(HTMLInputElement | null)[]>([]);
   const passwordRef = useRef<HTMLInputElement | null>(null);
-
-  useEffect(() => {
-    if (resendCooldown <= 0) return;
-    const timer = setInterval(() => {
-      setResendCooldown((prev) => Math.max(0, prev - 1));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [resendCooldown]);
-
-  useEffect(() => {
-    if (step === 'OTP') {
-      const t = setTimeout(() => otpInputsRef.current[0]?.focus(), 120);
-      return () => clearTimeout(t);
-    }
-  }, [step]);
 
   const spring = reduceMotion
     ? { type: 'tween' as const, duration: 0.15 }
@@ -119,21 +88,6 @@ export default function LoginPage() {
       y: 0,
       transition: spring,
     },
-  };
-
-  const panelVariants: Variants = {
-    initial: { opacity: 0, y: reduceMotion ? 0 : 8, filter: reduceMotion ? 'blur(0px)' : 'blur(2px)' },
-    animate: { opacity: 1, y: 0, filter: 'blur(0px)', transition: spring },
-    exit: { opacity: 0, y: reduceMotion ? 0 : -6, filter: reduceMotion ? 'blur(0px)' : 'blur(2px)', transition: { duration: 0.18, ease: [0.23, 1, 0.32, 1] } },
-  };
-
-  const switchAuthMethod = (method: AuthMethod) => {
-    if (method === authMethod) return;
-    setAuthMethod(method);
-    setErrorMessage(null);
-    setStep('CREDENTIALS');
-    setOtp(['', '', '', '', '', '']);
-    setResendCooldown(0);
   };
 
   const finishAuth = (successToast: string) => {
@@ -197,128 +151,6 @@ export default function LoginPage() {
     }
   };
 
-  const handleSendCode = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMessage(null);
-
-    // OTP is only requested when the Passwordless method is active.
-    if (authMethod !== 'OTP') return;
-
-    const trimmedEmail = email.trim().toLowerCase();
-    if (!trimmedEmail || !trimmedEmail.includes('@')) {
-      setErrorMessage('Enter a valid email address.');
-      return;
-    }
-
-    setIsSubmitting(true);
-    const result = await signInWithOtp(trimmedEmail);
-    setIsSubmitting(false);
-
-    if (result.success) {
-      toast.success('Verification code sent to your email');
-      setStep('OTP');
-      setResendCooldown(30);
-      setOtp(['', '', '', '', '', '']);
-    } else {
-      setErrorMessage(result.error || 'Failed to send verification code.');
-    }
-  };
-
-  const handleOtpChange = (index: number, value: string) => {
-    setErrorMessage(null);
-    const digit = value.replace(/\D/g, '').slice(-1);
-
-    const newOtp = [...otp];
-    newOtp[index] = digit;
-    setOtp(newOtp);
-
-    if (digit && index < 5) {
-      otpInputsRef.current[index + 1]?.focus();
-    }
-
-    if (digit && index === 5 && newOtp.every((d) => d !== '')) {
-      void handleVerifyOtp(newOtp.join(''));
-    }
-  };
-
-  const handleOtpKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Backspace') {
-      if (!otp[index] && index > 0) {
-        otpInputsRef.current[index - 1]?.focus();
-      }
-    } else if (e.key === 'ArrowLeft' && index > 0) {
-      otpInputsRef.current[index - 1]?.focus();
-    } else if (e.key === 'ArrowRight' && index < 5) {
-      otpInputsRef.current[index + 1]?.focus();
-    }
-  };
-
-  const handleOtpPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
-    e.preventDefault();
-    const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
-    if (!pasted) return;
-
-    const newOtp = [...otp];
-    for (let i = 0; i < 6; i++) {
-      newOtp[i] = pasted[i] || '';
-    }
-    setOtp(newOtp);
-
-    const nextIndex = Math.min(pasted.length, 5);
-    otpInputsRef.current[nextIndex]?.focus();
-
-    if (pasted.length === 6) {
-      void handleVerifyOtp(pasted);
-    }
-  };
-
-  const handleVerifyOtp = async (codeToVerify?: string) => {
-    const code = codeToVerify || otp.join('');
-    if (code.length < 6) {
-      setErrorMessage('Enter all 6 digits of your verification code.');
-      return;
-    }
-
-    setIsSubmitting(true);
-    setErrorMessage(null);
-
-    const result = await verifyOtp(email.trim().toLowerCase(), code);
-    setIsSubmitting(false);
-
-    if (result.success) {
-      finishAuth('Successfully authenticated!');
-    } else {
-      setErrorMessage(result.error || 'Invalid or expired verification code. Try again.');
-    }
-  };
-
-  const handleResend = async () => {
-    if (resendCooldown > 0 || isSubmitting || authMethod !== 'OTP') return;
-    setErrorMessage(null);
-    setIsSubmitting(true);
-
-    const result = await signInWithOtp(email.trim().toLowerCase());
-    setIsSubmitting(false);
-
-    if (result.success) {
-      toast.success('New 6-digit code sent');
-      setResendCooldown(30);
-      setOtp(['', '', '', '', '', '']);
-      otpInputsRef.current[0]?.focus();
-    } else {
-      setErrorMessage(result.error || 'Failed to resend code.');
-    }
-  };
-
-  const title =
-    step === 'OTP'
-      ? 'Enter Verification Code'
-      : 'Welcome Back';
-  const subtitle =
-    step === 'OTP'
-      ? `Enter the 6-digit code sent to ${email}`
-      : 'Sign in to access your assessment workspace';
-
   return (
     <div className="relative flex min-h-dvh w-full overflow-x-hidden bg-white font-sans text-neutral-950 antialiased selection:bg-neutral-900 selection:text-white lg:h-dvh lg:overflow-hidden">
       <div className="flex h-full w-full flex-col justify-between overflow-y-auto p-4 sm:p-6 lg:w-1/2 lg:p-8 xl:p-10">
@@ -341,83 +173,35 @@ export default function LoginPage() {
           >
             <motion.div variants={itemVariants} className="mb-5 text-center sm:mb-6">
               <h1 className="text-balance text-[28px] font-bold tracking-[-0.03em] text-neutral-900 sm:text-[32px]">
-                {title}
+                Welcome Back
               </h1>
               <p className="mt-1.5 text-pretty text-[13px] leading-relaxed text-neutral-500">
-                {subtitle}
+                Sign in to access your assessment workspace
               </p>
             </motion.div>
 
-            {step === 'CREDENTIALS' && (
-              <>
-                <motion.div variants={itemVariants} className="mb-3 sm:mb-4">
-                  <button
-                    type="button"
-                    onClick={handleGoogleAuth}
-                    disabled={isSubmitting}
-                    className={secondaryBtnClass}
-                  >
-                    <GoogleIcon className="text-lg" />
-                    <span>Continue with Google</span>
-                  </button>
-                </motion.div>
+            <motion.div variants={itemVariants} className="mb-3 sm:mb-4">
+              <button
+                type="button"
+                onClick={handleGoogleAuth}
+                disabled={isSubmitting}
+                className={secondaryBtnClass}
+              >
+                <GoogleIcon className="text-lg" />
+                <span>Continue with Google</span>
+              </button>
+            </motion.div>
 
-                <motion.div
-                  variants={itemVariants}
-                  className="relative my-3 flex items-center sm:my-4"
-                >
-                  <div className="grow border-t border-neutral-200" />
-                  <span className="px-3 text-[11px] font-medium uppercase tracking-[0.08em] text-neutral-400">
-                    or email
-                  </span>
-                  <div className="grow border-t border-neutral-200" />
-                </motion.div>
-
-                {/* Auth method segmented control — Password | Passwordless */}
-                <motion.div variants={itemVariants} className="mb-4">
-                  <div
-                    role="tablist"
-                    aria-label="Sign-in method"
-                    className="relative grid grid-cols-2 rounded-full bg-neutral-100/90 p-1 ring-1 ring-neutral-200/80"
-                  >
-                    {([
-                      { id: 'PASSWORD' as const, label: 'Password' },
-                      { id: 'OTP' as const, label: 'Passwordless' },
-                    ]).map((option) => {
-                      const selected = authMethod === option.id;
-                      return (
-                        <button
-                          key={option.id}
-                          type="button"
-                          role="tab"
-                          aria-selected={selected}
-                          onClick={() => switchAuthMethod(option.id)}
-                          className={`relative z-10 rounded-full py-2 text-[13px] font-semibold tracking-[-0.01em] transition-colors duration-150 ${
-                            selected
-                              ? 'text-neutral-950'
-                              : 'text-neutral-500 hover:text-neutral-800'
-                          }`}
-                        >
-                          {selected && (
-                            <motion.span
-                              layoutId={reduceMotion ? undefined : 'auth-method-pill'}
-                              className="absolute inset-0 -z-10 rounded-full bg-white shadow-[0_1px_2px_rgba(0,0,0,0.06),0_4px_12px_rgba(0,0,0,0.04)] ring-1 ring-black/5"
-                              transition={spring}
-                            />
-                          )}
-                          {option.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <p className="mt-2 text-center text-[11px] leading-relaxed text-neutral-400">
-                    {authMethod === 'PASSWORD'
-                      ? 'Use the password you created at registration.'
-                      : 'We’ll email a code only after you request it.'}
-                  </p>
-                </motion.div>
-              </>
-            )}
+            <motion.div
+              variants={itemVariants}
+              className="relative my-3 flex items-center sm:my-4"
+            >
+              <div className="grow border-t border-neutral-200" />
+              <span className="px-3 text-[11px] font-medium uppercase tracking-[0.08em] text-neutral-400">
+                or email
+              </span>
+              <div className="grow border-t border-neutral-200" />
+            </motion.div>
 
             <AnimatePresence mode="wait" initial={false}>
               {errorMessage && (
@@ -436,238 +220,94 @@ export default function LoginPage() {
               )}
             </AnimatePresence>
 
-            <AnimatePresence mode="wait" initial={false}>
-              {step === 'CREDENTIALS' && authMethod === 'PASSWORD' && (
-                <motion.form
-                  key="password-form"
-                  variants={panelVariants}
-                  initial="initial"
-                  animate="animate"
-                  exit="exit"
-                  onSubmit={handlePasswordLogin}
-                  className="flex flex-col gap-3"
-                >
-                  <div className="flex flex-col gap-1.5">
-                    <label htmlFor="email" className="text-[12px] font-semibold tracking-wide text-neutral-700">
-                      Email
-                    </label>
-                    <div className="relative">
-                      <input
-                        id="email"
-                        type="email"
-                        autoComplete="email"
-                        required
-                        value={email}
-                        onChange={(e) => {
-                          setEmail(e.target.value);
-                          setErrorMessage(null);
-                        }}
-                        placeholder="name@university.edu"
-                        disabled={isSubmitting}
-                        className={`${fieldClass} pl-10`}
-                      />
-                      <Mail className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
-                    </div>
-                  </div>
+            <motion.form
+              variants={itemVariants}
+              onSubmit={handlePasswordLogin}
+              className="flex flex-col gap-3"
+            >
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="email" className="text-[12px] font-semibold tracking-wide text-neutral-700">
+                  Email
+                </label>
+                <div className="relative">
+                  <input
+                    id="email"
+                    type="email"
+                    autoComplete="email"
+                    required
+                    value={email}
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      setErrorMessage(null);
+                    }}
+                    placeholder="name@university.edu"
+                    disabled={isSubmitting}
+                    className={`${fieldClass} pl-10`}
+                  />
+                  <Mail className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
+                </div>
+              </div>
 
-                  <div className="flex flex-col gap-1.5">
-                    <div className="flex items-center justify-between">
-                      <label htmlFor="password" className="text-[12px] font-semibold tracking-wide text-neutral-700">
-                        Password
-                      </label>
-                      <Link
-                        href="/forgot-password"
-                        className="text-[12px] font-medium text-neutral-500 transition-colors duration-150 hover:text-neutral-900"
-                      >
-                        Forgot password?
-                      </Link>
-                    </div>
-                    <div className="relative">
-                      <input
-                        id="password"
-                        ref={passwordRef}
-                        type={showPassword ? 'text' : 'password'}
-                        autoComplete="current-password"
-                        required
-                        value={password}
-                        onChange={(e) => {
-                          setPassword(e.target.value);
-                          setErrorMessage(null);
-                        }}
-                        placeholder="Enter your password"
-                        disabled={isSubmitting}
-                        className={`${fieldClass} pl-10 pr-11`}
-                      />
-                      <Lock className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword((v) => !v)}
-                        className="absolute right-2 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full text-neutral-400 transition-colors duration-150 hover:text-neutral-700"
-                        aria-label={showPassword ? 'Hide password' : 'Show password'}
-                      >
-                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="pt-1">
-                    <button
-                      type="submit"
-                      disabled={isSubmitting || !email.trim() || !password}
-                      className={primaryBtnClass}
-                    >
-                      {isSubmitting ? (
-                        <>
-                          <RefreshCw className="h-4 w-4 animate-spin" />
-                          <span>Signing in…</span>
-                        </>
-                      ) : (
-                        <>
-                          <span>Sign In</span>
-                          <ArrowRight className="h-4 w-4" />
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </motion.form>
-              )}
-
-              {step === 'CREDENTIALS' && authMethod === 'OTP' && (
-                <motion.form
-                  key="otp-request-form"
-                  variants={panelVariants}
-                  initial="initial"
-                  animate="animate"
-                  exit="exit"
-                  onSubmit={handleSendCode}
-                  className="flex flex-col gap-3"
-                >
-                  <div className="flex flex-col gap-1.5">
-                    <label htmlFor="otp-email" className="text-[12px] font-semibold tracking-wide text-neutral-700">
-                      Email
-                    </label>
-                    <div className="relative">
-                      <input
-                        id="otp-email"
-                        type="email"
-                        autoComplete="email"
-                        required
-                        value={email}
-                        onChange={(e) => {
-                          setEmail(e.target.value);
-                          setErrorMessage(null);
-                        }}
-                        placeholder="name@university.edu"
-                        disabled={isSubmitting}
-                        className={`${fieldClass} pl-10`}
-                      />
-                      <Mail className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
-                    </div>
-                  </div>
-
-                  <div className="pt-1">
-                    <button
-                      type="submit"
-                      disabled={isSubmitting || !email.trim()}
-                      className={primaryBtnClass}
-                    >
-                      {isSubmitting ? (
-                        <>
-                          <RefreshCw className="h-4 w-4 animate-spin" />
-                          <span>Sending code…</span>
-                        </>
-                      ) : (
-                        <>
-                          <span>Send 6-Digit Code</span>
-                          <ArrowRight className="h-4 w-4" />
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </motion.form>
-              )}
-
-              {step === 'OTP' && (
-                <motion.div
-                  key="otp-verify"
-                  variants={panelVariants}
-                  initial="initial"
-                  animate="animate"
-                  exit="exit"
-                  className="flex flex-col gap-4"
-                >
-                  <div
-                    className="flex justify-center gap-2 sm:gap-2.5"
-                    onPaste={handleOtpPaste}
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-center justify-between">
+                  <label htmlFor="password" className="text-[12px] font-semibold tracking-wide text-neutral-700">
+                    Password
+                  </label>
+                  <Link
+                    href="/forgot-password"
+                    className="text-[12px] font-medium text-neutral-500 transition-colors duration-150 hover:text-neutral-900"
                   >
-                    {otp.map((digit, i) => (
-                      <input
-                        key={i}
-                        ref={(el) => {
-                          otpInputsRef.current[i] = el;
-                        }}
-                        type="text"
-                        inputMode="numeric"
-                        pattern="[0-9]*"
-                        maxLength={1}
-                        value={digit}
-                        onChange={(e) => handleOtpChange(i, e.target.value)}
-                        onKeyDown={(e) => handleOtpKeyDown(i, e)}
-                        disabled={isSubmitting}
-                        aria-label={`Digit ${i + 1}`}
-                        className={`h-12 w-11 rounded-[14px] border bg-neutral-50/70 text-center font-mono text-lg font-bold text-neutral-900 tabular-nums transition-[border-color,background-color,box-shadow] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] focus:bg-white focus:outline-none sm:h-14 sm:w-12 sm:text-xl ${
-                          digit
-                            ? 'border-neutral-900 bg-white ring-1 ring-neutral-900'
-                            : 'border-neutral-200 focus:border-neutral-900 focus:ring-1 focus:ring-neutral-900'
-                        }`}
-                      />
-                    ))}
-                  </div>
-
+                    Forgot password?
+                  </Link>
+                </div>
+                <div className="relative">
+                  <input
+                    id="password"
+                    ref={passwordRef}
+                    type={showPassword ? 'text' : 'password'}
+                    autoComplete="current-password"
+                    required
+                    value={password}
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                      setErrorMessage(null);
+                    }}
+                    placeholder="Enter your password"
+                    disabled={isSubmitting}
+                    className={`${fieldClass} pl-10 pr-11`}
+                  />
+                  <Lock className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
                   <button
                     type="button"
-                    onClick={() => void handleVerifyOtp()}
-                    disabled={isSubmitting || otp.some((d) => !d)}
-                    className={primaryBtnClass}
+                    onClick={() => setShowPassword((v) => !v)}
+                    className="absolute right-2 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full text-neutral-400 transition-colors duration-150 hover:text-neutral-700"
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
                   >
-                    {isSubmitting ? (
-                      <>
-                        <RefreshCw className="h-4 w-4 animate-spin" />
-                        <span>Verifying…</span>
-                      </>
-                    ) : (
-                      <>
-                        <KeyRound className="h-4 w-4" />
-                        <span>Verify & Continue</span>
-                      </>
-                    )}
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
+                </div>
+              </div>
 
-                  <div className="flex items-center justify-between pt-1 text-[12px] text-neutral-500">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setStep('CREDENTIALS');
-                        setErrorMessage(null);
-                        setOtp(['', '', '', '', '', '']);
-                      }}
-                      className="text-neutral-600 underline decoration-neutral-300 underline-offset-2 transition-colors duration-150 hover:text-neutral-900"
-                    >
-                      Change email
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => void handleResend()}
-                      disabled={resendCooldown > 0 || isSubmitting}
-                      className="font-medium text-neutral-900 transition-colors duration-150 hover:underline disabled:text-neutral-400 disabled:no-underline"
-                    >
-                      {resendCooldown > 0 ? `Resend in ${resendCooldown}s` : 'Resend code'}
-                    </button>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
+              <div className="pt-1">
+                <button
+                  type="submit"
+                  disabled={isSubmitting || !email.trim() || !password}
+                  className={primaryBtnClass}
+                >
+                  {isSubmitting ? (
+                    <>
+                      <RefreshCw className="h-4 w-4 animate-spin" />
+                      <span>Signing in…</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Sign In</span>
+                      <ArrowRight className="h-4 w-4" />
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.form>
 
             <motion.div variants={itemVariants} className="mt-6 text-center">
               <p className="text-[13px] text-neutral-500">

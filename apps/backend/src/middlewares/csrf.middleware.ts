@@ -11,8 +11,37 @@ function generateToken(): string {
   return crypto.randomBytes(32).toString('hex');
 }
 
+/**
+ * Reserved for future signed provider webhooks (no handlers ship today).
+ * Used by csrfProtection in app.ts. Do not add unsigned webhook routes.
+ * Phase 3 plan: document footgun; user asked to implement Phase 3.
+ */
+function isWebhookPath(req: Request): boolean {
+  const path = (req.originalUrl || req.url || '').split('?')[0];
+  return /^\/api(\/v\d+)?\/webhooks?(\/|$)/.test(path);
+}
+
+/**
+ * Pure Bearer-token requests carry no ambient credentials: a cross-site
+ * attacker cannot set the Authorization header, so CSRF does not apply.
+ * Skipped whenever the access_token cookie is present (cookie auth in play).
+ */
+function isPureBearerRequest(req: Request): boolean {
+  const auth = req.headers.authorization;
+  return (
+    typeof auth === 'string' &&
+    auth.startsWith('Bearer ') &&
+    auth.length > 7 &&
+    !req.cookies?.access_token
+  );
+}
+
 export function csrfProtection(req: Request, res: Response, next: NextFunction): void {
-  const cookieToken = req.cookies[COOKIE_NAME];
+  if (!SAFE_METHODS.includes(req.method) && (isWebhookPath(req) || isPureBearerRequest(req))) {
+    next();
+    return;
+  }
+  const cookieToken = req.cookies?.[COOKIE_NAME];
 
   if (SAFE_METHODS.includes(req.method)) {
     if (!cookieToken) {

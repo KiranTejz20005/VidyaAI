@@ -27,12 +27,12 @@ const router = Router();
 router.use(authenticate);
 
 router.post('/generate/assignment', validate(generateAssignmentReportSchema), requireRole('TEACHER', 'ADMIN', 'SUPER_ADMIN'), asyncHandler(generateAssignmentReport));
-router.get('/generate/:jobId', validate(jobIdParamSchema), asyncHandler(getReportStatus));
+router.get('/generate/:jobId', validate(jobIdParamSchema), requireRole('TEACHER', 'ADMIN', 'SUPER_ADMIN'), asyncHandler(getReportStatus));
 
-router.get('/assignment/:assignmentId', validate(assignmentIdParamSchema), asyncHandler(getAssignmentReport));
+router.get('/assignment/:assignmentId', validate(assignmentIdParamSchema), requireRole('TEACHER', 'ADMIN', 'SUPER_ADMIN'), asyncHandler(getAssignmentReport));
 router.get('/student/:studentId', validate(studentIdParamSchema), asyncHandler(getStudentReport));
-router.get('/class/:classId', validate(classIdParamSchema), asyncHandler(getClassReport));
-router.get('/organization/:orgId', validate(orgIdParamSchema), asyncHandler(getOrganizationReport));
-router.get('/download/:reportId', validate(reportIdParamSchema), asyncHandler(downloadReport));
+router.get('/class/:classId', validate(classIdParamSchema), requireRole('TEACHER', 'ADMIN', 'SUPER_ADMIN'), asyncHandler(getClassReport));
+router.get('/organization/:orgId', validate(orgIdParamSchema), requireRole('ADMIN', 'SUPER_ADMIN'), asyncHandler(getOrganizationReport));
+router.get('/download/:reportId', validate(reportIdParamSchema), requireRole('TEACHER', 'ADMIN', 'SUPER_ADMIN'), asyncHandler(downloadReport));
 
 export default router;

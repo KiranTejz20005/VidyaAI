@@ -25,6 +25,11 @@ vi.mock('../../config/prisma', () => ({
       findUnique: (...args: unknown[]) => findUniqueUser(...args),
       create: (...args: unknown[]) => createUser(...args),
     },
+    $transaction: async (fn: (tx: unknown) => unknown) =>
+      fn({
+        organization: { create: vi.fn().mockResolvedValue({ id: 'org-personal' }) },
+        user: { create: (...args: unknown[]) => createUser(...args) },
+      }),
     loginHistory: { create: vi.fn().mockResolvedValue({}) },
     session: { create: vi.fn().mockResolvedValue({ id: 'sess-1' }) },
     refreshToken: { create: vi.fn().mockResolvedValue({ id: 'rt-1' }) },

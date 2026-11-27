@@ -25,7 +25,7 @@ export const createInvitation = async ({
 
     // Cancel any existing pending invitations for this email
     await prisma.invitation.updateMany({
-      where: { email, status: 'PENDING' },
+      where: { email, organizationId, status: 'PENDING' },
       data: { status: 'CANCELLED' }
     });
 

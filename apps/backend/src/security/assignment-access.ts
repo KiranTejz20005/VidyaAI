@@ -25,7 +25,7 @@ export class NotFoundError extends Error {
   }
 }
 
-const PUBLISHED_STATUSES = new Set(['PUBLISHED', 'ACTIVE', 'COMPLETED', 'APPROVED']);
+export const PUBLISHED_STATUSES = new Set(['PUBLISHED', 'ACTIVE', 'COMPLETED', 'APPROVED']);
 
 export async function loadAssignmentScoped(
   assignmentId: string,

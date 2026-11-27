@@ -1,12 +1,12 @@
 import { Router } from 'express';
 import { exportAssessmentPdf } from '../controllers/export.controller';
-import { authenticate } from '../middlewares/auth.middleware';
+import { authenticate, authorize } from '../middlewares/auth.middleware';
 
 const router = Router();
 
 router.use(authenticate);
 
-// Allow authenticated users to export PDF
-router.get('/:assessmentId/pdf', exportAssessmentPdf);
+// Staff only; the controller additionally scopes by organization / author
+router.get('/:assessmentId/pdf', authorize(['TEACHER', 'ADMIN', 'SUPER_ADMIN']), exportAssessmentPdf);
 
 export default router;

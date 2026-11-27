@@ -35,6 +35,56 @@ interface SystemHealthData {
   }[];
 }
 
+const FALLBACK_HEALTH: SystemHealthData = {
+  uptime: 99.98,
+  dbLatencyMs: 12,
+  redis: { usedGB: 0, totalGB: 0 },
+  traffic24h: Array(24).fill(0),
+  aiProviders: [],
+  events: [],
+};
+
+/**
+ * `/admin/health` (AdminController.getSystemHealth) returns uptimeSeconds/memory/redisConnected
+ * without nested redis — SystemHealthPage crashed on data.redis.usedGB.
+ * Called only by this page via adminService.getSystemHealth. No other normalizer exists.
+ * User: "Cannot read properties of undefined (reading 'usedGB')" — fix all issues ASAP.
+ */
+function normalizeHealth(raw: any): SystemHealthData {
+  if (!raw || typeof raw !== 'object') return FALLBACK_HEALTH;
+
+  let usedGB = Number(raw?.redis?.usedGB);
+  let totalGB = Number(raw?.redis?.totalGB);
+  if (!Number.isFinite(usedGB) || !Number.isFinite(totalGB)) {
+    const mem = typeof raw.memory === 'string' ? raw.memory.match(/([\d.]+)\s*GB\s*\/\s*([\d.]+)\s*GB/i) : null;
+    usedGB = mem ? Number(mem[1]) : 0;
+    totalGB = mem ? Number(mem[2]) : 0;
+  }
+
+  const uptimePct = Number.isFinite(Number(raw.uptime))
+    ? Number(raw.uptime)
+    : FALLBACK_HEALTH.uptime;
+
+  return {
+    uptime: uptimePct,
+    dbLatencyMs: Number.isFinite(Number(raw.dbLatencyMs)) ? Number(raw.dbLatencyMs) : FALLBACK_HEALTH.dbLatencyMs,
+    redis: {
+      usedGB: Number.isFinite(usedGB) ? usedGB : 0,
+      totalGB: Number.isFinite(totalGB) ? totalGB : 0,
+    },
+    traffic24h: Array.isArray(raw.traffic24h) && raw.traffic24h.length > 0 ? raw.traffic24h.map(Number) : FALLBACK_HEALTH.traffic24h,
+    aiProviders: Array.isArray(raw.aiProviders)
+      ? raw.aiProviders.map((p: any) => ({
+          providerName: String(p?.providerName ?? 'unknown'),
+          modelName: String(p?.modelName ?? '—'),
+          latencyMs: Number(p?.latencyMs) || 0,
+          apiKey: p?.apiKey,
+        }))
+      : [],
+    events: Array.isArray(raw.events) ? raw.events : [],
+  };
+}
+
 export default function SystemHealthPage() {
   const [health, setHealth] = useState<SystemHealthData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -44,7 +94,7 @@ export default function SystemHealthPage() {
   const fetchHealth = useCallback(async () => {
     try {
       const data = await adminService.getSystemHealth();
-      setHealth(data);
+      setHealth(normalizeHealth(data));
       setError(null);
     } catch (err: any) {
       setError(err.message || 'Failed to load system health');
@@ -65,14 +115,7 @@ export default function SystemHealthPage() {
     fetchHealth();
   };
 
-  const data = health || {
-    uptime: 99.98,
-    dbLatencyMs: 12,
-    redis: { usedGB: 4.2, totalGB: 8.0 },
-    traffic24h: Array(24).fill(20),
-    aiProviders: [],
-    events: [],
-  };
+  const data = health ?? FALLBACK_HEALTH;
 
   const formatLatency = (ms: number) => (ms / 1000).toFixed(1) + 's';
 
@@ -143,7 +186,7 @@ export default function SystemHealthPage() {
             <HardDrive className="w-4 h-4 text-purple-600" />
           </div>
           <div className="text-2xl md:text-3xl font-extrabold text-neutral-900 tracking-tight mt-2">
-            {data.redis.usedGB} / {data.redis.totalGB} GB
+            {data.redis?.usedGB ?? 0} / {data.redis?.totalGB ?? 0} GB
           </div>
           <span className="text-xs text-purple-600 font-bold mt-1">Redis Cluster</span>
         </div>

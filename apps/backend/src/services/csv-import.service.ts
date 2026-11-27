@@ -2,7 +2,12 @@ import * as xlsx from 'xlsx';
 import prisma from '../config/prisma';
 import { logger } from '../utils/logger';
 import { SystemRole } from '@prisma/client';
+// processCsvImport — called by AdminController.importUsersCsv. Writes User rows.
+// Phase 3: per-user temp passwords via hashPassword + generateTemporaryPassword.
+import { resolveAssignableRole } from './admin/user.service';
+import type { AdminActor } from './admin/admin-scope';
 import * as argon2 from 'argon2';
+import { generateTemporaryPassword } from '../security/credentials';
 
 export interface CsvImportReport {
   created: number;
@@ -12,7 +17,7 @@ export interface CsvImportReport {
   errors: Array<{ row: number; email: string; error: string }>;
 }
 
-export const processCsvImport = async (filePath: string, organizationId: string, _createdById: string): Promise<CsvImportReport> => {
+export const processCsvImport = async (filePath: string, organizationId: string, _createdById: string, actor: Pick<AdminActor, 'isSuperAdmin'>): Promise<CsvImportReport> => {
   const report: CsvImportReport = {
     created: 0,
     skipped: 0,
@@ -20,6 +25,8 @@ export const processCsvImport = async (filePath: string, organizationId: string,
     invalidEmails: 0,
     errors: []
   };
+
+  if (!organizationId) throw new Error('Organization scope required');
 
   try {
     const workbook = xlsx.readFile(filePath);
@@ -34,10 +41,6 @@ export const processCsvImport = async (filePath: string, organizationId: string,
     const existingEmails = new Set(existingUsers.map(u => u.email.toLowerCase()));
 
     const usersToCreate: any[] = [];
-    const validRoles = ['STUDENT', 'TEACHER', 'FACULTY', 'ADMIN', 'ORG_ADMIN', 'SUPER_ADMIN'];
-    
-    // Default passwords
-    const passwordHash = await argon2.hash('Welcome@123');
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
@@ -48,7 +51,7 @@ export const processCsvImport = async (filePath: string, organizationId: string,
       };
 
       const email = getVal('email').toLowerCase();
-      let roleStr = getVal('role').toUpperCase();
+      const roleStr = getVal('role');
       const firstName = getVal('first') || 'Imported';
       const lastName = getVal('last') || 'User';
 
@@ -64,21 +67,27 @@ export const processCsvImport = async (filePath: string, organizationId: string,
         continue;
       }
       
-      if (roleStr === 'FACULTY') roleStr = 'TEACHER'; // Map FACULTY to TEACHER
-
-      if (!validRoles.includes(roleStr)) {
+      // Same policy as invitations/user creation, but ADMIN is reserved for SUPER_ADMIN callers
+      // and SUPER_ADMIN can never be minted through a bulk import.
+      let role: SystemRole;
+      try {
+        role = resolveAssignableRole(actor, roleStr, { allowOrgAdmin: false });
+        if (role === 'SUPER_ADMIN') throw new Error('SUPER_ADMIN cannot be assigned via CSV import');
+      } catch (e: any) {
         report.skipped++;
-        report.errors.push({ row: i + 2, email, error: `Invalid role: ${roleStr}` });
+        report.errors.push({ row: i + 2, email, error: `Invalid or disallowed role "${roleStr}": ${e.message}` });
         continue;
       }
 
+      // Per-user temporary password (never a shared default like Welcome@123).
+      const passwordHash = await argon2.hash(generateTemporaryPassword());
       usersToCreate.push({
         email,
         passwordHash,
         firstName,
         lastName,
-        role: roleStr as SystemRole,
-        organizationId: organizationId || null,
+        role,
+        organizationId,
         forcePasswordReset: true,
       });
       existingEmails.add(email); // Prevent duplicates within the same file

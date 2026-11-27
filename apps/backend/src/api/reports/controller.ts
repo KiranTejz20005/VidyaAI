@@ -4,6 +4,14 @@ import { sendSuccess, sendNotFound, sendAccepted } from '../common/response';
 import { AnalyticsService } from '../../services/analytics.service';
 import prisma from '../../config/prisma';
 import {
+  getRequestOrgId,
+  getRequestUserId,
+  isAdminRole,
+  isStudentRole,
+  isSuperAdmin,
+  requireRequestOrgId,
+} from '../../security/request-context';
+import {
   serializeReportJob,
   serializeAssignmentReport,
   serializeStudentReport,
@@ -12,12 +20,33 @@ import {
   serializeDownloadReport,
 } from './serializers';
 
+/**
+ * Assignments a caller may report on: confined to their tenant; teachers only
+ * their own, admins the whole organization.
+ */
+function assignmentScope(req: Request): Record<string, unknown> {
+  if (isSuperAdmin(req.user?.role) && !getRequestOrgId(req)) return {};
+  const scope: Record<string, unknown> = { organizationId: requireRequestOrgId(req) };
+  if (!isAdminRole(req.user?.role)) scope.createdById = getRequestUserId(req);
+  return scope;
+}
+
 export const generateAssignmentReport = async (req: Request, res: Response): Promise<void> => {
   const { assignmentId } = req.body;
 
+  const owned = await prisma.assignment.findFirst({
+    where: { id: assignmentId, ...assignmentScope(req) },
+    select: { id: true, organizationId: true },
+  });
+  if (!owned) {
+    sendNotFound(res, 'Assignment not found');
+    return;
+  }
+
   const job = await prisma.generationJob.create({
     data: {
-      assignmentId,
+      assignmentId: owned.id,
+      organizationId: owned.organizationId,
       status: 'QUEUED',
       progress: 0,
       progressVersion: 0,
@@ -32,7 +61,7 @@ export const generateAssignmentReport = async (req: Request, res: Response): Pro
 export const getReportStatus = async (req: Request, res: Response): Promise<void> => {
   const { jobId } = req.params;
 
-  const job = await prisma.generationJob.findUnique({ where: { id: jobId } });
+  const job = await prisma.generationJob.findFirst({ where: { id: jobId, assignment: assignmentScope(req) } });
   if (!job) {
     sendNotFound(res, 'Report generation job not found');
     return;
@@ -44,8 +73,8 @@ export const getReportStatus = async (req: Request, res: Response): Promise<void
 export const getAssignmentReport = async (req: Request, res: Response): Promise<void> => {
   const { assignmentId } = req.params;
 
-  const assignment = await prisma.assignment.findUnique({
-    where: { id: assignmentId },
+  const assignment = await prisma.assignment.findFirst({
+    where: { id: assignmentId, ...assignmentScope(req) },
     include: { submissions: { include: { evaluations: true } } },
   });
 
@@ -76,6 +105,23 @@ export const getAssignmentReport = async (req: Request, res: Response): Promise<
 export const getStudentReport = async (req: Request, res: Response): Promise<void> => {
   const { studentId } = req.params;
 
+  // Students may only read their own report; staff only students of their organization.
+  if (isStudentRole(req.user?.role)) {
+    if (studentId !== getRequestUserId(req)) {
+      sendNotFound(res, 'Student not found');
+      return;
+    }
+  } else {
+    const student = await prisma.user.findFirst({
+      where: { id: studentId, role: 'STUDENT', ...(isSuperAdmin(req.user?.role) && !getRequestOrgId(req) ? {} : { organizationId: requireRequestOrgId(req) }) },
+      select: { id: true },
+    });
+    if (!student) {
+      sendNotFound(res, 'Student not found');
+      return;
+    }
+  }
+
   const performance = await AnalyticsService.getStudentPerformance(studentId);
 
   sendSuccess(res, {
@@ -94,8 +140,12 @@ export const getStudentReport = async (req: Request, res: Response): Promise<voi
 export const getClassReport = async (req: Request, res: Response): Promise<void> => {
   const { classId } = req.params;
 
-  const classData = await prisma.class.findUnique({
-    where: { id: classId },
+  const classScope: Record<string, unknown> = isSuperAdmin(req.user?.role) && !getRequestOrgId(req)
+    ? {}
+    : { organizationId: requireRequestOrgId(req) };
+  if (!isAdminRole(req.user?.role)) classScope.facultyId = getRequestUserId(req);
+  const classData = await prisma.class.findFirst({
+    where: { id: classId, ...classScope },
     include: { students: true, faculty: true },
   });
 
@@ -122,6 +172,11 @@ export const getClassReport = async (req: Request, res: Response): Promise<void>
 export const getOrganizationReport = async (req: Request, res: Response): Promise<void> => {
   const { orgId } = req.params;
 
+  // Only a SUPER_ADMIN may report on an organization other than their own.
+  if (!isSuperAdmin(req.user?.role) && orgId !== getRequestOrgId(req)) {
+    sendNotFound(res, 'Organization not found');
+    return;
+  }
   const org = await prisma.organization.findUnique({ where: { id: orgId } });
   if (!org) {
     sendNotFound(res, 'Organization not found');
@@ -148,7 +203,7 @@ export const getOrganizationReport = async (req: Request, res: Response): Promis
 export const downloadReport = async (req: Request, res: Response): Promise<void> => {
   const { reportId } = req.params;
 
-  const job = await prisma.generationJob.findUnique({ where: { id: reportId } });
+  const job = await prisma.generationJob.findFirst({ where: { id: reportId, assignment: assignmentScope(req) } });
   if (!job) {
     sendNotFound(res, 'Report not found');
     return;

@@ -194,7 +194,11 @@ export const saveQuizSession = async (req: Request, res: Response): Promise<void
       return;
     }
 
-    const userId = (req as any).user?.id || 'demo-faculty-id';
+    const userId = (req as any).user?.id as string | undefined;
+    if (!userId) {
+      res.status(401).json({ success: false, error: 'Authentication required' });
+      return;
+    }
 
     const session = await prisma.quizSession.create({
       data: {
@@ -234,9 +238,7 @@ export const saveQuizSession = async (req: Request, res: Response): Promise<void
     }, 'Quiz Created');
 
     // Update Streak!
-    if (userId !== 'demo-faculty-id') {
-      await StreakService.recordActivity(userId);
-    }
+    await StreakService.recordActivity(userId);
 
     res.status(201).json({ success: true, data: session });
   } catch (error) {
@@ -252,7 +254,11 @@ export const saveQuizSession = async (req: Request, res: Response): Promise<void
 export const getQuizSessionById = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const userId = (req as any).user?.id || 'demo-faculty-id';
+    const userId = (req as any).user?.id as string | undefined;
+    if (!userId) {
+      res.status(401).json({ success: false, error: 'Authentication required' });
+      return;
+    }
 
     const session = await prisma.quizSession.findUnique({
       where: { id },
@@ -282,7 +288,11 @@ export const getQuizSessionById = async (req: Request, res: Response): Promise<v
 export const updateQuizSession = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const userId = (req as any).user?.id || 'demo-faculty-id';
+    const userId = (req as any).user?.id as string | undefined;
+    if (!userId) {
+      res.status(401).json({ success: false, error: 'Authentication required' });
+      return;
+    }
     const { score, timeTakenSeconds, attempts } = req.body;
 
     const session = await prisma.quizSession.findUnique({
@@ -317,7 +327,11 @@ export const updateQuizSession = async (req: Request, res: Response): Promise<vo
  */
 export const getQuizHistory = async (req: Request, res: Response): Promise<void> => {
   try {
-    const userId = (req as any).user?.id || 'demo-faculty-id';
+    const userId = (req as any).user?.id as string | undefined;
+    if (!userId) {
+      res.status(401).json({ success: false, error: 'Authentication required' });
+      return;
+    }
     const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
 
     const sessions = await prisma.quizSession.findMany({
@@ -344,7 +358,11 @@ export const getQuizHistory = async (req: Request, res: Response): Promise<void>
  */
 export const clearQuizHistory = async (req: Request, res: Response): Promise<void> => {
   try {
-    const userId = (req as any).user?.id || 'demo-faculty-id';
+    const userId = (req as any).user?.id as string | undefined;
+    if (!userId) {
+      res.status(401).json({ success: false, error: 'Authentication required' });
+      return;
+    }
 
     await prisma.quizSession.deleteMany({ where: { userId } });
 

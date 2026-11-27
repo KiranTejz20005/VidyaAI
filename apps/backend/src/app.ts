@@ -30,6 +30,8 @@ import { errorMiddleware } from './middlewares/error.middleware';
 import { logger } from './utils/logger';
 import { AuditService } from './services/audit.service';
 import { globalIpRateLimiter } from './middlewares/rate-limit.middleware';
+// createApp() wires ResilientRedisStore into express-rate-limit (Phase 3).
+import { ResilientRedisStore } from './api/auth/resilient-store';
 import { resolveUploadPath, UnsafePathError } from './utils/safe-path';
 import { normalizeRole } from './security/request-context';
 import {
@@ -374,6 +376,8 @@ async function startBackgroundWorkers() {
 function createApp() {
   const app = express();
   app.use(cookieParser());
+  // Render (and similar) terminate TLS at one reverse-proxy hop. Do not raise
+  // this without matching the real topology — extra hops let clients spoof XFF.
   app.set('trust proxy', 1);
 
   const corsOrigins = parseCorsOrigins(env.FRONTEND_URL);
@@ -470,6 +474,7 @@ function createApp() {
   const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: process.env.NODE_ENV === 'development' ? 20000 : 3000,
+    store: new ResilientRedisStore('api'),
     keyGenerator: (req) => {
       const header = req.headers.authorization;
       if (header && header.startsWith('Bearer ')) {

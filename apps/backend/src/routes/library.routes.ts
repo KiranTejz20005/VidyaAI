@@ -14,12 +14,12 @@ import { uploadMiddleware } from '../middlewares/upload.middleware';
 
 const router = Router();
 
-// Public routes (No authentication required)
-router.get('/:id/download', asyncHandler(downloadResource));
-router.get('/:id/view', asyncHandler(viewResource));
-
 router.use(authenticate);
 router.use(requireOrganizationScope());
+
+// Files are served only to authenticated staff of the resource's own organization.
+router.get('/:id/download', requireRole('TEACHER', 'FACULTY', 'ADMIN', 'SUPER_ADMIN'), asyncHandler(downloadResource));
+router.get('/:id/view', requireRole('TEACHER', 'FACULTY', 'ADMIN', 'SUPER_ADMIN'), asyncHandler(viewResource));
 
 // Faculty can manage their library resources
 router.post('/', requireRole('TEACHER', 'FACULTY', 'ADMIN', 'SUPER_ADMIN'), uploadMiddleware.single('file'), asyncHandler(uploadResource));

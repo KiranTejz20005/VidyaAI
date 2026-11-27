@@ -13,6 +13,19 @@ function getOrgId(req: Request): string {
   return orgId;
 }
 
+/**
+ * Returns true when every given ClassStudent id belongs to a class of the
+ * organization, so a group can never be linked to another tenant's roster.
+ */
+async function classStudentsInOrg(ids: Array<string | null | undefined>, orgId: string): Promise<boolean> {
+  const wanted = Array.from(new Set(ids.filter((v): v is string => typeof v === 'string' && v.length > 0)));
+  if (wanted.length === 0) return true;
+  const found = await prisma.classStudent.count({
+    where: { id: { in: wanted }, class: { organizationId: orgId } },
+  });
+  return found === wanted.length;
+}
+
 const GROUP_COLORS = [
   { bg: '#EDE9FE', color: '#7C3AED' },
   { bg: '#D1FAE5', color: '#059669' },
@@ -98,6 +111,12 @@ export const createGroup = async (req: Request, res: Response): Promise<void> =>
       }
     }
 
+    if (Array.isArray(students) && students.length > 0
+      && !(await classStudentsInOrg(students.map((s: any) => s?.classStudentId), orgId))) {
+      res.status(404).json({ success: false, error: 'Student not found' });
+      return;
+    }
+
     const group = await prisma.group.create({
       data: { 
         name, 
@@ -141,7 +160,13 @@ export const createGroup = async (req: Request, res: Response): Promise<void> =>
         skipDuplicates: true,
       });
 
-      const validStudents = students.filter((s: any) => s.userId);
+      // Only users of this organization may be linked into the community group.
+      const requestedUserIds: string[] = students.map((s: any) => s.userId).filter((v: unknown): v is string => typeof v === 'string' && v.length > 0);
+      const orgUsers = requestedUserIds.length
+        ? await prisma.user.findMany({ where: { id: { in: requestedUserIds }, organizationId: orgId }, select: { id: true } })
+        : [];
+      const orgUserIds = new Set(orgUsers.map((u) => u.id));
+      const validStudents = students.filter((s: any) => s.userId && orgUserIds.has(s.userId));
       if (validStudents.length > 0) {
         await prisma.groupMember.createMany({
           data: validStudents.map((s: any) => ({
@@ -191,6 +216,17 @@ export const updateGroup = async (req: Request, res: Response): Promise<void> =>
     if (!group) {
       res.status(404).json({ success: false, error: 'Group not found or access denied' });
       return;
+    }
+
+    if (classId) {
+      const cls = await prisma.class.findFirst({
+        where: { id: classId, facultyId: userId, organizationId: orgId },
+        select: { id: true },
+      });
+      if (!cls) {
+        res.status(403).json({ success: false, error: 'Invalid class or access denied' });
+        return;
+      }
     }
 
     const updated = await prisma.group.update({
@@ -315,6 +351,10 @@ export const addStudent = async (req: Request, res: Response): Promise<void> => 
       res.status(400).json({ success: false, error: 'name, rollNo, and email are required' });
       return;
     }
+    if (!(await classStudentsInOrg([classStudentId], orgId))) {
+      res.status(404).json({ success: false, error: 'Student not found' });
+      return;
+    }
     const student = await prisma.groupStudent.create({
       data: { groupId: req.params.id, name, rollNo, email, classStudentId: classStudentId || null },
     });
@@ -340,7 +380,14 @@ export const deleteStudent = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
-    await prisma.groupStudent.delete({ where: { id: req.params.studentId } });
+    // Scoped to the verified group: a student id from another group is "not found".
+    const removed = await prisma.groupStudent.deleteMany({
+      where: { id: req.params.studentId, groupId: group.id },
+    });
+    if (removed.count === 0) {
+      res.status(404).json({ success: false, error: 'Student not found' });
+      return;
+    }
     res.json({ success: true, message: 'Student removed' });
   } catch (error: any) {
     if (error?.code === 'P2025') {
@@ -370,6 +417,10 @@ export const bulkAddStudents = async (req: Request, res: Response): Promise<void
     const { students } = req.body;
     if (!Array.isArray(students) || students.length === 0) {
       res.status(400).json({ success: false, error: 'students array is required' });
+      return;
+    }
+    if (!(await classStudentsInOrg(students.map((s: any) => s?.classStudentId), orgId))) {
+      res.status(404).json({ success: false, error: 'Student not found' });
       return;
     }
     const created = await prisma.groupStudent.createMany({

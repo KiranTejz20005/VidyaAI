@@ -32,6 +32,7 @@ const NON_REFRESHABLE_ENDPOINTS = [
   '/auth/logout',
   '/auth/google',
   '/auth/signup',
+  '/auth/otp',
   '/auth/forgot-password',
   '/auth/reset-password',
 ];

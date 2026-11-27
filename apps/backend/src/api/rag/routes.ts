@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { asyncHandler } from '../../utils/async-handler';
-import { authenticate } from '../../middlewares/auth.middleware';
+import { authenticate, authorize } from '../../middlewares/auth.middleware';
 import { validate } from '../../middlewares/validate.middleware';
 import {
   search,
@@ -25,7 +25,7 @@ router.use(authenticate);
 router.post('/search', validate(searchSchema), asyncHandler(search));
 router.post('/retrieve', validate(retrieveSchema), asyncHandler(retrieve));
 router.get('/documents', validate(listIndexedDocumentsSchema), asyncHandler(listIndexedDocuments));
-router.post('/documents/:id/reindex', validate(reindexDocumentSchema), asyncHandler(reindexDocument));
+router.post('/documents/:id/reindex', authorize(['TEACHER', 'ADMIN']), validate(reindexDocumentSchema), asyncHandler(reindexDocument));
 router.post('/query', validate(ragQuerySchema), asyncHandler(ragQuery));
 router.get('/stats', asyncHandler(getStats));
 

@@ -35,7 +35,10 @@ const router = Router();
 router.use(authenticate);
 router.use(requireRole('ADMIN', 'SUPER_ADMIN'));
 
-router.get('/dashboard', asyncHandler(getDashboard));
+// Platform-wide (cross-tenant) data and global configuration: SUPER_ADMIN only.
+const superAdminOnly = requireRole('SUPER_ADMIN');
+
+router.get('/dashboard', superAdminOnly, asyncHandler(getDashboard));
 
 router.get('/users', validate(paginationQuerySchema), asyncHandler(listUsers));
 router.post('/users', validate(createUserSchema), asyncHandler(createUser));
@@ -43,16 +46,16 @@ router.put('/users/:id', validate(updateUserSchema), asyncHandler(updateUser));
 router.delete('/users/:id', validate(idParamSchema), asyncHandler(deactivateUser));
 router.put('/users/:id/role', validate(changeRoleSchema), asyncHandler(changeUserRole));
 
-router.get('/organizations', asyncHandler(listOrganizations));
-router.post('/organizations', validate(createOrganizationSchema), asyncHandler(createOrganization));
+router.get('/organizations', superAdminOnly, asyncHandler(listOrganizations));
+router.post('/organizations', superAdminOnly, validate(createOrganizationSchema), asyncHandler(createOrganization));
 router.put('/organizations/:id', validate(updateOrganizationSchema), asyncHandler(updateOrganization));
 
 router.get('/audit-logs', validate(paginationQuerySchema), asyncHandler(getAuditLogs));
 
-router.get('/system/settings', asyncHandler(getSystemSettings));
-router.put('/system/settings', validate(updateSystemSettingsSchema), asyncHandler(updateSystemSettings));
+router.get('/system/settings', superAdminOnly, asyncHandler(getSystemSettings));
+router.put('/system/settings', superAdminOnly, validate(updateSystemSettingsSchema), asyncHandler(updateSystemSettings));
 
-router.get('/subscriptions', asyncHandler(getSubscriptions));
-router.get('/usage', asyncHandler(getPlatformUsage));
+router.get('/subscriptions', superAdminOnly, asyncHandler(getSubscriptions));
+router.get('/usage', superAdminOnly, asyncHandler(getPlatformUsage));
 
 export default router;

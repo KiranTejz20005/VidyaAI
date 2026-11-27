@@ -43,12 +43,14 @@ router.post('/users/invite', asyncHandler(AdminController.inviteUser));
 router.post('/users/import', uploadMiddleware.single('file'), asyncHandler(AdminController.importUsersCsv));
 
 // ── 4. Role & Permission Management ──
-router.get('/roles', asyncHandler(AdminController.getRoles));
-router.post('/roles', asyncHandler(AdminController.createRole));
-router.put('/roles/:id', asyncHandler(AdminController.updateRole));
-router.delete('/roles/:id', asyncHandler(AdminController.deleteRole));
-router.get('/permissions', asyncHandler(AdminController.getPermissions));
-router.post('/roles/:id/permissions', asyncHandler(AdminController.assignPermissions));
+// Role/Permission tables are global (not tenant-scoped): SUPER_ADMIN only.
+const superAdminOnly = authorize(['SUPER_ADMIN']);
+router.get('/roles', superAdminOnly, asyncHandler(AdminController.getRoles));
+router.post('/roles', superAdminOnly, asyncHandler(AdminController.createRole));
+router.put('/roles/:id', superAdminOnly, asyncHandler(AdminController.updateRole));
+router.delete('/roles/:id', superAdminOnly, asyncHandler(AdminController.deleteRole));
+router.get('/permissions', superAdminOnly, asyncHandler(AdminController.getPermissions));
+router.post('/roles/:id/permissions', superAdminOnly, asyncHandler(AdminController.assignPermissions));
 // ── 5.1. Classroom Management ──
 router.get('/classrooms', asyncHandler(AdminController.getClassrooms));
 router.post('/classrooms', asyncHandler(AdminController.createClassroom));
@@ -95,20 +97,21 @@ router.post('/billing/invoices', asyncHandler(AdminController.createSubscription
 router.get('/billing/usage/:organizationId', asyncHandler(AdminController.getBillingUsage));
 
 // ── 13. AI Provider Management ──
-router.get('/ai-providers', asyncHandler(AdminController.getAiProviders));
-router.post('/ai-providers/health', asyncHandler(AdminController.testProviderHealth));
-router.put('/ai-providers/failover', asyncHandler(AdminController.updateFailoverSettings));
+router.get('/ai-providers', superAdminOnly, asyncHandler(AdminController.getAiProviders));
+router.post('/ai-providers/health', superAdminOnly, asyncHandler(AdminController.testProviderHealth));
+router.put('/ai-providers/failover', superAdminOnly, asyncHandler(AdminController.updateFailoverSettings));
 
 // ── 14. Queue Management ──
-router.get('/queues/health', asyncHandler(AdminController.getQueueHealth));
-router.get('/queues/failed', asyncHandler(AdminController.getFailedJobs));
-router.post('/queues/retry', asyncHandler(AdminController.retryQueueJob));
+router.get('/queues/health', superAdminOnly, asyncHandler(AdminController.getQueueHealth));
+router.get('/queues/failed', superAdminOnly, asyncHandler(AdminController.getFailedJobs));
+router.post('/queues/retry', superAdminOnly, asyncHandler(AdminController.retryQueueJob));
 
 // ── 15. System Settings ──
 // System settings are fetched from SettingsController.
 import * as SettingsController from '../controllers/settings.controller';
 router.get('/settings', SettingsController.getSettings);
-router.put('/settings', SettingsController.updateSettings);
+// Global platform settings are not tenant-scoped: only a SUPER_ADMIN may change them.
+router.put('/settings', superAdminOnly, SettingsController.updateSettings);
 
 // ── 16. Faculty Management ──
 router.get('/faculty', asyncHandler(AdminController.getFaculty));

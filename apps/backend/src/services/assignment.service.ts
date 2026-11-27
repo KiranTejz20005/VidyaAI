@@ -129,9 +129,13 @@ export async function listAssignments(
   status?: import('@prisma/client').WorkflowStatus,
   organizationId?: string,
   createdById?: string,
+  statusIn?: string[],
 ): Promise<AssignmentListResult> {
   const filter: Record<string, unknown> = {};
-  if (status) {
+  if (statusIn) {
+    // Restrict to an allow-list; an explicit status outside it yields nothing.
+    filter.status = { in: status ? statusIn.filter((st) => st === status) : statusIn };
+  } else if (status) {
     filter.status = status;
   }
   if (organizationId) filter.organizationId = organizationId;

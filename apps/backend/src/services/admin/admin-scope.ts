@@ -1,6 +1,5 @@
 import type { Request } from 'express';
 import { ForbiddenError } from '../../api/common/errors';
-import { NO_ORGANIZATION_ID } from '../../middlewares/auth.middleware';
 import { getRequestOrgId, getRequestUserId, isSuperAdmin } from '../../security/request-context';
 
 /**
@@ -17,8 +16,7 @@ export interface AdminActor {
 
 /** Caller tenant from the token, treating the "no organization" sentinel as absent. */
 export function callerOrgId(req: Request): string | undefined {
-  const orgId = getRequestOrgId(req);
-  return orgId && orgId !== NO_ORGANIZATION_ID ? orgId : undefined;
+  return getRequestOrgId(req);
 }
 
 export function requireCallerOrgId(req: Request): string {

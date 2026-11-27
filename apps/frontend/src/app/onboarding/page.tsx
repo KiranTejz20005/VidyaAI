@@ -232,7 +232,7 @@ export default function OnboardingPage() {
       {
         id: 'institution',
         title: 'Select university or teaching campus',
-        description: 'Find your college in our registry or register a new campus.',
+        description: 'Tell us your college for your profile. Joining a campus requires an admin invite.',
         icon: School,
         actionLabel: 'Confirm Institution'
       },
@@ -350,17 +350,7 @@ export default function OnboardingPage() {
     setIsSubmitting(true);
     const finalOrgName = organizationName.trim() || collegeSearchQuery.trim() || 'VidyaAI Academy';
 
-    const logs = [
-      'Saving user profile preferences...',
-      'Mapping institution & department structure...',
-      userRole === 'STUDENT' ? 'Enrolling into study tracks...' : 'Provisioning class group & student roster...',
-      'Finalizing workspace dashboard...'
-    ];
-
-    for (let i = 0; i < logs.length; i++) {
-      setProgressText(logs[i]);
-      await new Promise((resolve) => setTimeout(resolve, 400));
-    }
+    setProgressText('Finalizing workspace dashboard...');
 
     try {
       const result = await completeOnboarding({
@@ -370,7 +360,20 @@ export default function OnboardingPage() {
         department: department || 'General Studies',
         className: className || (userRole === 'STUDENT' ? 'General Student Track' : 'Class 1A'),
         subject: subject || (userRole === 'STUDENT' ? selectedInterests[0] || 'Core Track' : 'Core Syllabus'),
-        students
+        students,
+        profileExtras: {
+          // Declared institution only — never assigns organizationId (Phase 3).
+          college: finalOrgName,
+          department: department || 'General Studies',
+          academicYear,
+          ...(userRole === 'STUDENT'
+            ? {
+                studentId: studentId.trim() || undefined,
+                interests: selectedInterests,
+                classCode: classCode.trim() || undefined,
+              }
+            : { title: title.trim() || undefined }),
+        },
       });
 
       if (result.success) {
@@ -383,10 +386,28 @@ export default function OnboardingPage() {
         toast.success('Onboarding complete!');
         router.replace(getDashboardRoute(user?.role || userRole));
       } else {
-        toast.error(result.error || 'Failed to complete onboarding.');
+        toast.error(`${result.error || 'Failed to complete onboarding.'} Please try again.`);
       }
     } catch (err: any) {
-      toast.error(err.message || 'An error occurred during onboarding.');
+      toast.error(`${err.message || 'An error occurred during onboarding.'} Please try again.`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleSkip = async () => {
+    setIsSubmitting(true);
+    setProgressText('Opening your dashboard...');
+    try {
+      const result = await skipOnboarding();
+      if (result.success) {
+        toast.success('Setup skipped — you can finish this later.');
+        router.replace(getDashboardRoute(user?.role || userRole));
+        return;
+      }
+      toast.error(result.error || 'Could not skip setup.');
+    } catch (err: any) {
+      toast.error(err.message || 'Could not skip setup.');
     } finally {
       setIsSubmitting(false);
     }

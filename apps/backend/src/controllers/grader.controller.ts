@@ -18,6 +18,18 @@ export const saveGradingConfig = async (req: Request, res: Response): Promise<vo
     await assertCanGradeAssignment(req, assignmentId);
     const { rubricId, answerKeyText, autoEvaluate } = req.body;
 
+    // A rubric may only be attached when it belongs to the caller's organization.
+    if (rubricId) {
+      const rubric = await prisma.rubric.findFirst({
+        where: { id: rubricId, organizationId: requireRequestOrgId(req) },
+        select: { id: true },
+      });
+      if (!rubric) {
+        res.status(404).json({ success: false, error: 'Rubric not found' });
+        return;
+      }
+    }
+
     const config = await prisma.assignmentGradingConfig.upsert({
       where: { assignmentId },
       create: {

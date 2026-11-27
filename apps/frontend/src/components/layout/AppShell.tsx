@@ -8,7 +8,7 @@ import { useAuthStore } from '@/store/auth.store';
 import { useAdminAuthStore } from '@/store/admin-auth.store';
 import { useSidebarStore } from '@/store/sidebar.store';
 import { SuperAdminSidebar } from './SuperAdminSidebar';
-import { getDashboardRoute, validateRouteAccess } from '@/utils/navigation';
+import { getDashboardRoute, isOnboarded as isUserOnboarded, validateRouteAccess } from '@/utils/navigation';
 import { OrgAdminSidebar } from './OrgAdminSidebar';
 import { FacultySidebar } from './FacultySidebar';
 import { StudentSidebar } from './StudentSidebar';
@@ -21,6 +21,7 @@ import { RouteTransition } from './RouteTransition';
 import { canAccessRoute } from '@/config/route-permissions';
 import { useSystemStore } from '@/store/system.store';
 import { AlertTriangle } from 'lucide-react';
+import { ForcePasswordResetGate } from '@/components/auth/ForcePasswordResetGate';
 
 const loaderMessages = [
   "Securing workspace...",
@@ -124,7 +125,7 @@ function FullScreenLoader({ isLoading }: { isLoading: boolean }) {
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { user, isAuthenticated, isLoading, initialize } = useAuthStore();
+  const { user, isAuthenticated, isLoading, initialize, passwordResetRequired } = useAuthStore();
   const { initializeFromStorage, activeOrganizationId } = useAdminAuthStore();
   const { settings, fetchSettings, initialized } = useSystemStore();
   const { isCollapsed } = useSidebarStore();
@@ -135,15 +136,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, [initialize, initializeFromStorage]);
 
   useEffect(() => {
+    if (passwordResetRequired || user?.forcePasswordReset) return;
     fetchSettings();
-  }, [fetchSettings, activeOrganizationId, user?.role]);
+  }, [fetchSettings, activeOrganizationId, user?.role, user?.forcePasswordReset, passwordResetRequired]);
 
   useEffect(() => {
     if (isLoading) return;
 
     const publicPages = ['/', '/careers', '/contact', '/privacy', '/terms', '/cookie-policy', '/acceptable-use'];
     if (publicPages.includes(pathname)) return; // Never redirect from landing and public pages
-    const isPublicPath = pathname === '/login' || pathname === '/register';
+    const isPublicPath = pathname === '/login' || pathname === '/register' || pathname === '/accept-invite';
     const isAuthPage = pathname === '/login' || pathname === '/register';
     const isOnboardingPage = pathname === '/onboarding';
 
@@ -153,8 +155,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       }
     } else {
       const userRole = user?.role?.toUpperCase() || '';
-      const isSuperAdminOrAdmin = userRole === 'SUPER_ADMIN' || userRole === 'ADMIN';
-      const isOnboarded = isSuperAdminOrAdmin || user?.hasCompletedOnboarding === true || (user?.organizationId && user?.departmentId);
+      const isOnboarded = isUserOnboarded(user);
       
       // Used by app/layout.tsx — sole shell gate for onboarding vs dashboard.
       // Reads user.hasCompletedOnboarding; user asked: cannot skip onboarding.
@@ -179,7 +180,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   }, [isAuthenticated, isLoading, user, pathname, router]);
 
-  const publicPagesList = ['/', '/login', '/register', '/forgot-password', '/careers', '/contact', '/privacy', '/terms', '/cookie-policy', '/acceptable-use'];
+  const publicPagesList = ['/', '/login', '/register', '/accept-invite', '/forgot-password', '/careers', '/contact', '/privacy', '/terms', '/cookie-policy', '/acceptable-use'];
   const isPublicPage = publicPagesList.includes(pathname);
   const isRedirectingToLogin = !isLoading && !isAuthenticated && !isPublicPage && pathname !== '/onboarding';
 
@@ -194,6 +195,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     '/',
     '/login',
     '/register',
+    '/accept-invite',
     '/onboarding',
     '/careers',
     '/contact',
@@ -203,6 +205,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     '/acceptable-use'
   ];
   const isChromeExcluded = chromeExcludedPages.includes(pathname);
+
+  const mustResetPassword =
+    isAuthenticated && (passwordResetRequired || user?.forcePasswordReset === true);
+
+  // Forced password change outranks onboarding/dashboard — stops API 403 storms.
+  // Gate used by app/layout.tsx via AppShell only; no other global password gate exists.
+  if (mustResetPassword && pathname !== '/login' && pathname !== '/register') {
+    return (
+      <>
+        <ForcePasswordResetGate />
+        <ClientOnly>
+          <Toaster position="top-right" />
+        </ClientOnly>
+      </>
+    );
+  }
 
   if (isChromeExcluded) {
     return (
@@ -231,7 +249,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const role = user?.role?.toUpperCase() || '';
 
-  let SidebarComponent = <FacultySidebar />;
+  let SidebarComponent: React.ReactNode = (
+    <aside aria-hidden="true" className="hidden lg:block w-[260px] shrink-0" />
+  );
   let TopbarComponent = <Topbar />;
   
   if (role === 'SUPER_ADMIN') {

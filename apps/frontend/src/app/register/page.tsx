@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { motion, type Variants } from 'framer-motion';
 import { useAuthStore } from '@/store/auth.store';
+import { getDashboardRoute, isOnboarded } from '@/utils/navigation';
 import toast from 'react-hot-toast';
 import { Eye, EyeOff, MailCheck } from 'lucide-react';
 import { useGoogleLogin } from '@react-oauth/google';
@@ -82,13 +83,7 @@ export default function RegisterPage() {
       if (result.success) {
         toast.success('Successfully registered and logged in with Google!');
         const user = useAuthStore.getState().user;
-        const isOnboarded =
-          user?.hasCompletedOnboarding === true ||
-          !!(user?.organizationId && user?.departmentId);
-        const rolePath = user?.role
-          ? user.role.toLowerCase().replace('_', '-')
-          : 'student';
-        router.replace(isOnboarded ? `/dashboard/${rolePath}` : '/onboarding');
+        router.replace(user && isOnboarded(user) ? getDashboardRoute(user.role) : '/onboarding');
       } else {
         toast.error(result.error || 'Google registration failed.');
       }
@@ -102,11 +97,15 @@ export default function RegisterPage() {
     const handleMessage = async (event: MessageEvent) => {
       if (event.origin !== window.location.origin) return;
       if (event.data && event.data.type === 'SSO_SUCCESS') {
+        if (!event.data.email) {
+          toast.error('SSO did not return an email address.');
+          return;
+        }
         setIsSubmitting(true);
         const result = await ssoLogin({
-          email: event.data.email || 'student@vidyaai.com',
-          firstName: event.data.firstName || 'Student',
-          lastName: event.data.lastName || 'Member',
+          email: event.data.email,
+          firstName: event.data.firstName,
+          lastName: event.data.lastName,
           provider: event.data.provider || 'SSO',
           token: event.data.token,
           role: selectedRole,
@@ -121,13 +120,7 @@ export default function RegisterPage() {
             }!`
           );
           const user = useAuthStore.getState().user;
-          const isOnboarded =
-            user?.hasCompletedOnboarding === true ||
-            (user?.organizationId && user?.departmentId);
-          const rolePath = user?.role
-            ? user.role.toLowerCase().replace('_', '-')
-            : 'student';
-          router.replace(isOnboarded ? `/dashboard/${rolePath}` : '/onboarding');
+          router.replace(user && isOnboarded(user) ? getDashboardRoute(user.role) : '/onboarding');
         } else {
           toast.error(result.error || 'SSO registration failed.');
         }
@@ -495,13 +488,7 @@ export default function RegisterPage() {
     if (signupResult.success) {
       toast.success('Account registered successfully!');
       const user = useAuthStore.getState().user;
-      const isOnboarded =
-        user?.hasCompletedOnboarding === true ||
-        (user?.organizationId && user?.departmentId);
-      const rolePath = user?.role
-        ? user.role.toLowerCase().replace('_', '-')
-        : 'student';
-      router.replace(isOnboarded ? `/dashboard/${rolePath}` : '/onboarding');
+      router.replace(user && isOnboarded(user) ? getDashboardRoute(user.role) : '/onboarding');
     } else {
       toast.error(
         signupResult.error || 'Registration failed. Email might already be registered.'

@@ -125,7 +125,7 @@ export function StudentSidebar() {
   const displayName = user?.firstName
     ? `${user.firstName} ${user.lastName || ''}`.trim()
     : 'Student Member';
-  const displayEmail = user?.email || 'student@vidyaai.com';
+  const displayEmail = user?.email || '';
   const initials = displayName
     .split(' ')
     .map((n) => n[0])

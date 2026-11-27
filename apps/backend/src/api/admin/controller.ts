@@ -1,8 +1,8 @@
 import { Request, Response } from 'express';
 import { sendSuccess, sendCreated, sendNoContent } from '../common/response';
 import { parsePagination, buildPagination } from '../common/pagination';
-import { getRequestUserId } from '../../security/request-context';
-import { UserService, resolveAssignableRole, resolveTargetOrganization } from '../../services/admin/user.service';
+import { getRequestUserId, orgScope } from '../../security/request-context';
+import { UserService, resolveAssignableRole, resolveTargetOrganization, assertNotSelf } from '../../services/admin/user.service';
 import { actorFromRequest } from '../../services/admin/admin-scope';
 import { OrganizationService } from '../../services/admin/organization.service';
 import { BillingService } from '../../services/admin/billing.service';
@@ -43,7 +43,7 @@ export const getDashboard = async (_req: Request, res: Response): Promise<void> 
 export const listUsers = async (req: Request, res: Response): Promise<void> => {
   const { page, limit, sort, order, search } = parsePagination(req);
 
-  const where: any = {};
+  const where: any = { ...orgScope(req) };
   if (search) {
     where.OR = [
       { email: { contains: search, mode: 'insensitive' } },
@@ -98,6 +98,9 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
 
 export const deactivateUser = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
+  const actor = actorFromRequest(req);
+  await UserService.findManageableUser(actor, id);
+  assertNotSelf(actor, id, 'deactivate');
   await UserService.deleteUser(id);
 
   await AuditService.logAuditEvent({
@@ -172,7 +175,7 @@ export const updateOrganization = async (req: Request, res: Response): Promise<v
 export const getAuditLogs = async (req: Request, res: Response): Promise<void> => {
   const { page, limit, search } = parsePagination(req);
 
-  const where: any = {};
+  const where: any = { ...orgScope(req) };
   if (search) {
     where.OR = [
       { action: { contains: search, mode: 'insensitive' } },

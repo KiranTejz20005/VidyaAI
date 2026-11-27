@@ -48,7 +48,9 @@ export function parseSystemRole(input: unknown): SystemRole {
 
 /**
  * Resolves a requested role and enforces who may grant it: SUPER_ADMIN only by
- * a SUPER_ADMIN; ADMIN only by a SUPER_ADMIN when `allowOrgAdmin` is false.
+ * a SUPER_ADMIN; ADMIN only by a SUPER_ADMIN (least privilege). Callers:
+ * admin.controller inviteUser/createUser, api/users createUser, csv-import.
+ * Writes no DB itself; returns SystemRole. Phase 3: only SUPER_ADMIN manages ADMIN.
  */
 export function resolveAssignableRole(
   actor: Pick<AdminActor, 'isSuperAdmin'>,
@@ -59,7 +61,9 @@ export function resolveAssignableRole(
   if (role === 'SUPER_ADMIN' && !actor.isSuperAdmin) {
     throw new ForbiddenError('Only a SUPER_ADMIN can assign the SUPER_ADMIN role');
   }
-  if (role === 'ADMIN' && !actor.isSuperAdmin && options.allowOrgAdmin === false) {
+  // Default deny peer-ADMIN minting (matches CSV). Opt-in allowOrgAdmin is test-only.
+  const allowOrgAdmin = options.allowOrgAdmin === true;
+  if (role === 'ADMIN' && !actor.isSuperAdmin && !allowOrgAdmin) {
     throw new ForbiddenError('Only a SUPER_ADMIN can assign the ADMIN role');
   }
   return role;
@@ -193,11 +197,14 @@ export class UserService {
 
   /**
    * Loads a user the actor may administer. Non-super callers only reach users
-   * of their own organization (404 otherwise) and can never touch a SUPER_ADMIN.
+   * of their own organization (404 otherwise) and can never touch a SUPER_ADMIN
+   * or a peer ADMIN (least privilege — only SUPER_ADMIN manages org admins).
    */
   static async findManageableUser(actor: AdminActor, id: string, options: { roles?: SystemRole[] } = {}): Promise<User> {
     const target = await prisma.user.findUnique({ where: { id } });
     if (!target || target.status === 'DELETED') throw new NotFoundError('User not found');
+    // Role allow-list first so student/faculty endpoints keep 404 (not 403) for wrong roles.
+    if (options.roles && !options.roles.includes(target.role)) throw new NotFoundError('User not found');
     if (!actor.isSuperAdmin) {
       if (!actor.organizationId || target.organizationId !== actor.organizationId) {
         throw new NotFoundError('User not found');
@@ -205,8 +212,10 @@ export class UserService {
       if (target.role === 'SUPER_ADMIN') {
         throw new ForbiddenError('Access denied: Cannot modify SUPER_ADMIN users.');
       }
+      if (target.role === 'ADMIN') {
+        throw new ForbiddenError('Access denied: Only a SUPER_ADMIN can manage organization admins.');
+      }
     }
-    if (options.roles && !options.roles.includes(target.role)) throw new NotFoundError('User not found');
     return target;
   }
 

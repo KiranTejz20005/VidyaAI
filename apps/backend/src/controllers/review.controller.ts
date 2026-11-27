@@ -1,11 +1,36 @@
 import { Request, Response } from 'express';
 import prisma from '../config/prisma';
+import { getRequestOrgId, isSuperAdmin } from '../security/request-context';
+
+/**
+ * Questions a reviewer may act on: those of their own tenant. Only a
+ * SUPER_ADMIN without a selected organization is platform-wide.
+ */
+function reviewableQuestionScope(req: Request): { organizationId?: string } {
+  const orgId = getRequestOrgId(req);
+  if (isSuperAdmin(req.user?.role) && !orgId) return {};
+  // An unresolvable tenant matches nothing rather than everything.
+  return { organizationId: orgId ?? '__no_organization__' };
+}
 
 export const submitReview = async (req: Request, res: Response) => {
   try {
     const { questionId, status, comments } = req.body;
-    const reviewerId = req.user?.id || 'demo-reviewer-id';
-    
+    const reviewerId = req.user?.id;
+    if (!reviewerId) {
+      res.status(401).json({ success: false, error: 'Authentication required' });
+      return;
+    }
+
+    const question = await prisma.question.findFirst({
+      where: { id: questionId, ...reviewableQuestionScope(req) },
+      select: { id: true },
+    });
+    if (!question) {
+      res.status(404).json({ success: false, error: 'Question not found' });
+      return;
+    }
+
     const review = await prisma.questionReview.create({
       data: {
         questionId,
@@ -17,7 +42,7 @@ export const submitReview = async (req: Request, res: Response) => {
 
     if (status === 'APPROVED') {
       await prisma.question.update({
-        where: { id: questionId },
+        where: { id: question.id },
         data: { isPublished: true }
       });
     }
@@ -30,8 +55,16 @@ export const submitReview = async (req: Request, res: Response) => {
 
 export const getReviewsForQuestion = async (req: Request, res: Response) => {
   try {
+    const question = await prisma.question.findFirst({
+      where: { id: req.params.questionId, ...reviewableQuestionScope(req) },
+      select: { id: true },
+    });
+    if (!question) {
+      res.status(404).json({ success: false, error: 'Question not found' });
+      return;
+    }
     const reviews = await prisma.questionReview.findMany({
-      where: { questionId: req.params.questionId },
+      where: { questionId: question.id },
       include: { reviewer: { select: { firstName: true, lastName: true, role: true } } }
     });
     res.json({ success: true, data: reviews });
@@ -40,10 +73,10 @@ export const getReviewsForQuestion = async (req: Request, res: Response) => {
   }
 };
 
-export const getPendingReviews = async (_req: Request, res: Response): Promise<void> => {
+export const getPendingReviews = async (req: Request, res: Response): Promise<void> => {
   try {
     const questions = await prisma.question.findMany({
-      where: { isPublished: false },
+      where: { isPublished: false, ...reviewableQuestionScope(req) },
       include: {
         reviews: { include: { reviewer: { select: { firstName: true, lastName: true } } } },
         author: { select: { firstName: true, lastName: true } },

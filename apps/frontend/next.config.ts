@@ -63,6 +63,10 @@ const nextConfig: NextConfig = {
       { source: "/dashboard/teacher/:path*", destination: "/teacher/:path*", permanent: false },
       { source: "/dashboard/student", destination: "/student", permanent: false },
       { source: "/dashboard/student/:path*", destination: "/student/:path*", permanent: false },
+      { source: "/dashboard/admin", destination: "/admin", permanent: false },
+      { source: "/dashboard/admin/:path*", destination: "/admin/:path*", permanent: false },
+      { source: "/dashboard/super-admin", destination: "/super-admin", permanent: false },
+      { source: "/dashboard/super-admin/:path*", destination: "/super-admin/:path*", permanent: false },
     ];
   },
   async headers() {

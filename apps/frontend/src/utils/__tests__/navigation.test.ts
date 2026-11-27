@@ -77,3 +77,19 @@ describe('Navigation Utils', () => {
     });
   });
 });
+
+import { isOnboarded, normalizeRole } from '../navigation';
+
+describe('isOnboarded / normalizeRole', () => {
+  it('exempts admins and honors flags', () => {
+    expect(isOnboarded(null)).toBe(false);
+    expect(isOnboarded({ role: 'ADMIN' })).toBe(true);
+    expect(isOnboarded({ role: 'STUDENT' })).toBe(false);
+    expect(isOnboarded({ role: 'STUDENT', hasCompletedOnboarding: true })).toBe(true);
+    expect(isOnboarded({ role: 'TEACHER', organizationId: 'o', departmentId: 'd' })).toBe(true);
+  });
+  it('normalizes aliases', () => {
+    expect(normalizeRole('org_admin')).toBe('ADMIN');
+    expect(normalizeRole('faculty')).toBe('TEACHER');
+  });
+});

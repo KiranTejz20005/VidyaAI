@@ -5,8 +5,11 @@ import prisma from '../config/prisma';
 
 const router = Router();
 
+// Mounted at /api/v1/teacher (routes/index.ts). FE TeacherDashboard → GET /dashboard/stats.
+// Existing teacher.routes — ADMIN was 403 (authorize TEACHER-only). Schemas: Section/Class/Enrollment.
+// User: Forbidden Insufficient privileges + fix all issues ASAP.
 router.use(authenticate);
-router.use(authorize(['TEACHER']));
+router.use(authorize(['TEACHER', 'FACULTY', 'ADMIN']));
 
 // Teacher Dashboard Stats
 router.get('/dashboard/stats', asyncHandler(async (req, res) => {
@@ -260,10 +263,22 @@ router.post('/attendance', asyncHandler(async (req, res) => {
     return;
   }
 
+  // Every student must belong to the caller's organization: never write another tenant's records.
+  if (!records.every((r: any) => typeof r?.studentId === 'string' && r.studentId.length > 0)) {
+    res.status(400).json({ success: false, error: 'Each record needs a studentId' });
+    return;
+  }
+  const requestedIds: string[] = Array.from(new Set<string>(records.map((r: any) => r.studentId)));
+  const orgStudents = await prisma.user.count({ where: { id: { in: requestedIds }, organizationId: orgId } });
+  if (orgStudents !== requestedIds.length) {
+    res.status(404).json({ success: false, error: 'Student not found' });
+    return;
+  }
+
   // Upsert all records
   for (const record of records) {
     const existing = await prisma.attendanceRecord.findFirst({
-      where: { studentId: record.studentId, date: attendanceDate },
+      where: { studentId: record.studentId, date: attendanceDate, organizationId: orgId },
     });
 
     if (existing) {

@@ -5,7 +5,36 @@ import prisma from '../config/prisma';
 import {
   getRequestOrgId,
   getRequestUserId,
+  isAdminRole,
+  isSuperAdmin,
+  requireRequestOrgId,
 } from '../security/request-context';
+
+/**
+ * Lesson plans the caller may change: their own, or (for an organization
+ * admin) any plan of their own tenant. A SUPER_ADMIN is not tenant-confined.
+ */
+function canManageLessonPlan(
+  req: Request,
+  plan: { userId: string; organizationId: string | null },
+): boolean {
+  if (plan.userId === getRequestUserId(req)) return true;
+  if (isSuperAdmin(req.user?.role)) return true;
+  return isAdminRole(req.user?.role) && !!plan.organizationId && plan.organizationId === getRequestOrgId(req);
+}
+
+/**
+ * Generated papers a caller may touch: confined to their tenant; teachers only
+ * see papers of assignments they created, admins see the whole organization.
+ */
+function generatedPaperScope(req: Request): Record<string, unknown> {
+  if (isSuperAdmin(req.user?.role) && !getRequestOrgId(req)) return {};
+  const where: Record<string, unknown> = { organizationId: requireRequestOrgId(req) };
+  if (!isAdminRole(req.user?.role)) {
+    where.assignment = { createdById: getRequestUserId(req) };
+  }
+  return where;
+}
 
 /**
  * POST /v1/copilot/lesson-plan
@@ -56,7 +85,6 @@ export const getLessonPlans = async (req: Request, res: Response): Promise<void>
  */
 export const deleteLessonPlan = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
-  const userId = getRequestUserId(req);
   
   if (!id) {
     sendError(res, 400, 'Lesson plan ID is required', { errorCode: 'VALIDATION_ERROR' });
@@ -71,8 +99,9 @@ export const deleteLessonPlan = async (req: Request, res: Response): Promise<voi
     return;
   }
 
-  if (plan.userId !== userId && req.user?.role !== 'ADMIN') {
-    sendError(res, 403, 'Unauthorized to delete this lesson plan', { errorCode: 'UNAUTHORIZED' });
+  // Out-of-scope plans (another tenant or another teacher) are reported as missing.
+  if (!canManageLessonPlan(req, plan)) {
+    sendError(res, 404, 'Lesson plan not found', { errorCode: 'NOT_FOUND' });
     return;
   }
 
@@ -86,7 +115,6 @@ export const deleteLessonPlan = async (req: Request, res: Response): Promise<voi
  */
 export const updateLessonPlan = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
-  const userId = getRequestUserId(req);
   
   if (!id) {
     sendError(res, 400, 'Lesson plan ID is required', { errorCode: 'VALIDATION_ERROR' });
@@ -100,8 +128,8 @@ export const updateLessonPlan = async (req: Request, res: Response): Promise<voi
     return;
   }
 
-  if (plan.userId !== userId && req.user?.role !== 'ADMIN') {
-    sendError(res, 403, 'Unauthorized to edit this lesson plan', { errorCode: 'UNAUTHORIZED' });
+  if (!canManageLessonPlan(req, plan)) {
+    sendError(res, 404, 'Lesson plan not found', { errorCode: 'NOT_FOUND' });
     return;
   }
 
@@ -219,12 +247,7 @@ export const generateTestPaper = async (req: Request, res: Response): Promise<vo
  * Retrieves all generated test papers.
  */
 export const getTestPapers = async (req: Request, res: Response): Promise<void> => {
-  const organizationId = getRequestOrgId(req) ?? '';
-
-  const where: any = {};
-  if (organizationId) {
-    where.organizationId = organizationId;
-  }
+  const where = generatedPaperScope(req);
 
   const papers = await prisma.generatedPaper.findMany({
     where,
@@ -255,8 +278,8 @@ export const getTestPapers = async (req: Request, res: Response): Promise<void> 
 export const getTestPaperById = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
 
-  const paper = await prisma.generatedPaper.findUnique({
-    where: { id },
+  const paper = await prisma.generatedPaper.findFirst({
+    where: { id, ...generatedPaperScope(req) },
     include: {
       assignment: true
     }
@@ -277,7 +300,7 @@ export const getTestPaperById = async (req: Request, res: Response): Promise<voi
 export const deleteTestPaper = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
 
-  const paper = await prisma.generatedPaper.findUnique({ where: { id } });
+  const paper = await prisma.generatedPaper.findFirst({ where: { id, ...generatedPaperScope(req) } });
   if (!paper) {
     sendError(res, 404, 'Test paper not found', { errorCode: 'NOT_FOUND' });
     return;

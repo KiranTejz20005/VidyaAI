@@ -7,7 +7,10 @@ import { getRequestOrgId, orgScope, requireRequestOrgId } from '../../security/r
 import { LearningIntelligenceService } from '../../services/learning-intelligence.service';
 import { AnalyticsService } from '../../services/analytics.service';
 import prisma from '../../config/prisma';
-import { assertStudentAccess } from './student-access';
+// Callers: apps/frontend learning.service + mastery/study-plan pages via routes.ts.
+// Existing learning controller; schemas: StudentLearningProfile, PersonalizedStudyPlan, Student.
+// User: "find the root cause and fix it" for /learning/students/:id/profile 404.
+import { assertStudentAccess, resolveRosterStudentId } from './student-access';
 import {
   serializeProfile,
   serializePrediction,
@@ -25,6 +28,25 @@ function describeVelocity(knowledgeGrowth: number): string {
   if (knowledgeGrowth > 2) return 'Accelerating';
   if (knowledgeGrowth < -2) return 'Declining';
   return 'Stable';
+}
+
+/** Empty mastery payload when authorized but no roster/profile exists yet. */
+function emptyMasteryProfile(studentId: string) {
+  const now = new Date();
+  return {
+    id: `virtual-${studentId}`,
+    studentId,
+    masteryLevel: 0,
+    knowledgeGrowth: 0,
+    weakConcepts: [] as string[],
+    strongConcepts: [] as string[],
+    learningStyle: undefined as string | undefined,
+    createdAt: now,
+    updatedAt: now,
+    overallMasteryScore: 0,
+    predictedReadiness: 0,
+    learningVelocity: 'Stable',
+  };
 }
 
 /** Roster `Student` row of the caller's organization, or 404. */
@@ -59,17 +81,27 @@ export const listProfiles = async (req: Request, res: Response): Promise<void> =
 };
 
 export const getProfile = async (req: Request, res: Response): Promise<void> => {
+  // FE mastery page passes User.id; StudentLearningProfile.studentId is roster Student.id.
+  // Module: api/learning/controller getProfile. User: fix /learning/students/:id/profile 404.
   const { studentId } = req.params;
   await assertStudentAccess(req, studentId);
 
-  const profile = await prisma.studentLearningProfile.findUnique({
-    where: { studentId },
+  const rosterId = await resolveRosterStudentId(req, studentId);
+  if (!rosterId) {
+    sendSuccess(res, { data: emptyMasteryProfile(studentId) });
+    return;
+  }
+
+  let profile = await prisma.studentLearningProfile.findUnique({
+    where: { studentId: rosterId },
     include: { predictiveAnalytics: true },
   });
 
   if (!profile) {
-    sendNotFound(res, 'Learning profile not found');
-    return;
+    profile = await prisma.studentLearningProfile.create({
+      data: { studentId: rosterId, masteryLevel: 0, knowledgeGrowth: 0 },
+      include: { predictiveAnalytics: true },
+    });
   }
 
   const serialized = serializeProfile(profile);
@@ -150,8 +182,9 @@ export const getStudyPlans = async (req: Request, res: Response): Promise<void> 
   const { studentId } = req.params;
   await assertStudentAccess(req, studentId);
 
+  const rosterId = (await resolveRosterStudentId(req, studentId)) ?? studentId;
   const primaryPlan = await prisma.personalizedStudyPlan.findFirst({
-    where: { studentId },
+    where: { studentId: rosterId },
     orderBy: { createdAt: 'desc' },
   });
 

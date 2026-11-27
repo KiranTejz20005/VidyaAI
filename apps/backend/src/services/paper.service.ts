@@ -108,7 +108,8 @@ export async function savePaper(
 
 export async function getPaper(assignmentId: string, paperId?: string) {
   if (paperId) {
-    return prisma.generatedPaper.findUnique({ where: { id: paperId } });
+    // The paper must belong to the (already authorized) assignment.
+    return prisma.generatedPaper.findFirst({ where: { id: paperId, assignmentId } });
   }
   return prisma.generatedPaper.findFirst({
     where: { assignmentId },

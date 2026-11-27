@@ -1,4 +1,5 @@
 import { PERMISSIONS, Permission } from './permissions';
+import { normalizeRole } from './request-context';
 
 export const ROLE_PERMISSIONS: Record<string, Permission[]> = {
   SUPER_ADMIN: [
@@ -80,12 +81,9 @@ export const ROLE_PERMISSIONS: Record<string, Permission[]> = {
 };
 
 export const hasPermission = (role: string, permission: Permission): boolean => {
-  let normalizedRole = role;
-  if (role === 'FACULTY') normalizedRole = 'TEACHER';
-  if (role === 'ORG_ADMIN') normalizedRole = 'ADMIN';
-  
+  const normalizedRole = normalizeRole(role);
   if (normalizedRole === 'SUPER_ADMIN') return true;
-  const permissions = ROLE_PERMISSIONS[normalizedRole] ?? ROLE_PERMISSIONS[role];
+  const permissions = ROLE_PERMISSIONS[normalizedRole];
   if (!permissions) return false;
   return permissions.includes(permission);
 };
