@@ -3,13 +3,24 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { motion, type Variants } from 'framer-motion';
+import { AnimatePresence, motion, useReducedMotion, type Variants } from 'framer-motion';
 import { useAuthStore } from '@/store/auth.store';
 import toast from 'react-hot-toast';
-import { Mail, ArrowRight, RefreshCw, KeyRound, AlertCircle } from 'lucide-react';
+import {
+  Mail,
+  ArrowRight,
+  RefreshCw,
+  KeyRound,
+  AlertCircle,
+  Lock,
+  Eye,
+  EyeOff,
+} from 'lucide-react';
 import { useGoogleLogin } from '@react-oauth/google';
 
-// Simple Google SVG Icon
+type AuthMethod = 'PASSWORD' | 'OTP';
+type AuthStep = 'CREDENTIALS' | 'OTP';
+
 const GoogleIcon = (props: React.SVGProps<SVGSVGElement>) => (
   <svg viewBox="0 0 24 24" width="1em" height="1em" {...props}>
     <path
@@ -31,20 +42,46 @@ const GoogleIcon = (props: React.SVGProps<SVGSVGElement>) => (
   </svg>
 );
 
+function resolveDashboardPath(user: { role?: string; hasCompletedOnboarding?: boolean; organizationId?: string | null; departmentId?: string | null } | null) {
+  const isOnboarded =
+    user?.hasCompletedOnboarding === true ||
+    !!(user?.organizationId && user?.departmentId);
+
+  let dashboardPath = '/student';
+  if (user?.role === 'TEACHER' || user?.role === 'FACULTY') dashboardPath = '/faculty';
+  if (user?.role === 'ADMIN') dashboardPath = '/admin';
+  if (user?.role === 'SUPER_ADMIN') dashboardPath = '/super-admin';
+
+  return isOnboarded ? dashboardPath : '/onboarding';
+}
+
+const fieldClass =
+  'auth-field w-full rounded-[14px] border border-neutral-200/90 bg-white px-3.5 py-3 text-[15px] leading-snug text-neutral-900 placeholder:text-neutral-400 transition-[border-color,background-color,box-shadow] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] focus:border-neutral-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-neutral-900 disabled:opacity-60';
+
+const primaryBtnClass =
+  'flex w-full items-center justify-center gap-2 rounded-full bg-neutral-900 py-3 text-[15px] font-semibold tracking-[-0.01em] text-white shadow-sm transition-[transform,background-color,opacity] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] hover:bg-neutral-800 active:scale-[0.96] disabled:opacity-50 disabled:active:scale-100';
+
+const secondaryBtnClass =
+  'flex w-full items-center justify-center gap-2.5 rounded-full border border-neutral-200 bg-white px-4 py-3 text-[15px] font-medium tracking-[-0.01em] text-neutral-800 shadow-sm transition-[transform,background-color,opacity] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] hover:bg-neutral-50 active:scale-[0.96] disabled:opacity-50 disabled:active:scale-100';
+
 export default function LoginPage() {
   const router = useRouter();
-  const { signInWithOtp, verifyOtp, ssoLogin } = useAuthStore();
+  const reduceMotion = useReducedMotion();
+  const { login, signInWithOtp, verifyOtp } = useAuthStore();
+
   const [email, setEmail] = useState('');
-  const [step, setStep] = useState<'EMAIL' | 'OTP'>('EMAIL');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [authMethod, setAuthMethod] = useState<AuthMethod>('PASSWORD');
+  const [step, setStep] = useState<AuthStep>('CREDENTIALS');
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [resendCooldown, setResendCooldown] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [selectedRole, setSelectedRole] = useState<'STUDENT' | 'TEACHER' | 'ADMIN'>('STUDENT');
 
   const otpInputsRef = useRef<(HTMLInputElement | null)[]>([]);
+  const passwordRef = useRef<HTMLInputElement | null>(null);
 
-  // Cooldown countdown timer
   useEffect(() => {
     if (resendCooldown <= 0) return;
     const timer = setInterval(() => {
@@ -53,273 +90,56 @@ export default function LoginPage() {
     return () => clearInterval(timer);
   }, [resendCooldown]);
 
-  // Focus first OTP input when transitioning to OTP step
   useEffect(() => {
     if (step === 'OTP') {
-      setTimeout(() => {
-        otpInputsRef.current[0]?.focus();
-      }, 150);
+      const t = setTimeout(() => otpInputsRef.current[0]?.focus(), 120);
+      return () => clearTimeout(t);
     }
   }, [step]);
+
+  const spring = reduceMotion
+    ? { type: 'tween' as const, duration: 0.15 }
+    : { type: 'spring' as const, duration: 0.35, bounce: 0 };
 
   const containerVariants: Variants = {
     hidden: { opacity: 0 },
     visible: {
       opacity: 1,
       transition: {
-        staggerChildren: 0.06,
-        delayChildren: 0.05,
+        staggerChildren: reduceMotion ? 0 : 0.05,
+        delayChildren: reduceMotion ? 0 : 0.04,
       },
     },
   };
 
   const itemVariants: Variants = {
-    hidden: { opacity: 0, y: 12 },
+    hidden: { opacity: 0, y: reduceMotion ? 0 : 10 },
     visible: {
       opacity: 1,
       y: 0,
-      transition: {
-        type: 'spring',
-        stiffness: 320,
-        damping: 26,
-      },
+      transition: spring,
     },
   };
 
-  const openSSOPopup = (provider: 'google' | 'x') => {
-    const width = 500;
-    const height = 620;
-    const left = window.screen.width / 2 - width / 2;
-    const top = window.screen.height / 2 - height / 2;
+  const panelVariants: Variants = {
+    initial: { opacity: 0, y: reduceMotion ? 0 : 8, filter: reduceMotion ? 'blur(0px)' : 'blur(2px)' },
+    animate: { opacity: 1, y: 0, filter: 'blur(0px)', transition: spring },
+    exit: { opacity: 0, y: reduceMotion ? 0 : -6, filter: reduceMotion ? 'blur(0px)' : 'blur(2px)', transition: { duration: 0.18, ease: [0.23, 1, 0.32, 1] } },
+  };
 
-    const popup = window.open(
-      '',
-      `sso_login_${provider}`,
-      `width=${width},height=${height},top=${top},left=${left},status=no,menubar=no,toolbar=no`
-    );
+  const switchAuthMethod = (method: AuthMethod) => {
+    if (method === authMethod) return;
+    setAuthMethod(method);
+    setErrorMessage(null);
+    setStep('CREDENTIALS');
+    setOtp(['', '', '', '', '', '']);
+    setResendCooldown(0);
+  };
 
-    if (!popup) {
-      toast.error('Popup blocked! Please allow popups in your browser.');
-      return;
-    }
-
-    const providerName = provider === 'google' ? 'Google' : 'X';
-    const providerLogo =
-      provider === 'google'
-        ? `<svg viewBox="0 0 24 24" width="24" height="24" style="margin-right:8px;"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>`
-        : `<svg viewBox="0 0 24 24" width="24" height="24" fill="white" style="margin-right:8px;"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>`;
-
-    popup.document.write(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Sign in with ${providerName}</title>
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <style>
-            * { box-sizing: border-box; }
-            body {
-              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-              background-color: #f8fafc;
-              margin: 0;
-              padding: 24px;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              min-height: 100vh;
-            }
-            .card {
-              background: white;
-              padding: 28px;
-              border-radius: 16px;
-              box-shadow: 0 10px 25px -5px rgba(0,0,0,0.08), 0 8px 10px -6px rgba(0,0,0,0.04);
-              width: 100%;
-              max-width: 380px;
-              text-align: center;
-              border: 1px solid #e2e8f0;
-            }
-            .logo-container {
-              display: flex;
-              justify-content: center;
-              align-items: center;
-              margin-bottom: 16px;
-              font-weight: 700;
-              font-size: 16px;
-              color: #0f172a;
-            }
-            h1 {
-              font-size: 18px;
-              font-weight: 700;
-              color: #0f172a;
-              margin: 0 0 6px 0;
-            }
-            p {
-              font-size: 13px;
-              color: #64748b;
-              margin: 0 0 18px 0;
-              line-height: 1.4;
-            }
-            .profile-card {
-              display: flex;
-              align-items: center;
-              background: #f8fafc;
-              border: 1px solid #e2e8f0;
-              border-radius: 12px;
-              padding: 10px 14px;
-              margin-bottom: 10px;
-              text-align: left;
-              cursor: pointer;
-              transition: all 0.15s ease;
-            }
-            .profile-card:hover {
-              background: #f1f5f9;
-              border-color: #cbd5e1;
-              transform: translateY(-1px);
-            }
-            .avatar {
-              width: 36px;
-              height: 36px;
-              border-radius: 50%;
-              margin-right: 12px;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              font-size: 13px;
-              font-weight: bold;
-              color: white;
-            }
-            .profile-info {
-              flex: 1;
-            }
-            .name {
-              font-size: 13px;
-              font-weight: 600;
-              color: #0f172a;
-            }
-            .email {
-              font-size: 11px;
-              color: #64748b;
-            }
-            .role-badge {
-              font-size: 10px;
-              font-weight: 600;
-              padding: 2px 6px;
-              border-radius: 4px;
-              text-transform: uppercase;
-            }
-            .custom-input {
-              width: 100%;
-              padding: 10px 12px;
-              border: 1px solid #cbd5e1;
-              border-radius: 8px;
-              font-size: 13px;
-              margin-bottom: 10px;
-            }
-            .btn {
-              width: 100%;
-              padding: 10px;
-              background: #0f172a;
-              color: white;
-              border: none;
-              border-radius: 8px;
-              font-size: 13px;
-              font-weight: 600;
-              cursor: pointer;
-            }
-            .divider {
-              margin: 16px 0;
-              position: relative;
-              text-align: center;
-            }
-            .divider::before {
-              content: "";
-              position: absolute;
-              top: 50%;
-              left: 0;
-              right: 0;
-              border-top: 1px solid #e2e8f0;
-            }
-            .divider span {
-              position: relative;
-              background: white;
-              padding: 0 10px;
-              font-size: 11px;
-              color: #94a3b8;
-              text-transform: uppercase;
-            }
-          </style>
-        </head>
-        <body>
-          <div class="card">
-            <div class="logo-container">
-              ${providerLogo}
-              <span>${providerName} Single Sign-On</span>
-            </div>
-            <h1>Choose an Account</h1>
-            <p>Select a verified profile to log in to Vidya AI</p>
-
-            <div class="profile-card" onclick="selectUser('student@vidyaai.com', 'Alex', 'Johnson', 'STUDENT')">
-              <div class="avatar" style="background: #3b82f6;">AJ</div>
-              <div class="profile-info">
-                <div class="name">Alex Johnson</div>
-                <div class="email">student@vidyaai.com</div>
-              </div>
-              <span class="role-badge" style="background: #eff6ff; color: #1d4ed8;">Student</span>
-            </div>
-
-            <div class="profile-card" onclick="selectUser('faculty@vidyaai.com', 'Dr. Sarah', 'Mitchell', 'TEACHER')">
-              <div class="avatar" style="background: #10b981;">SM</div>
-              <div class="profile-info">
-                <div class="name">Dr. Sarah Mitchell</div>
-                <div class="email">faculty@vidyaai.com</div>
-              </div>
-              <span class="role-badge" style="background: #ecfdf5; color: #047857;">Faculty</span>
-            </div>
-
-            <div class="profile-card" onclick="selectUser('admin@vidyaai.com', 'Admin', 'Officer', 'ADMIN')">
-              <div class="avatar" style="background: #8b5cf6;">AO</div>
-              <div class="profile-info">
-                <div class="name">Admin Officer</div>
-                <div class="email">admin@vidyaai.com</div>
-              </div>
-              <span class="role-badge" style="background: #f5f3ff; color: #6d28d9;">Admin</span>
-            </div>
-
-            <div class="divider"><span>Or use custom email</span></div>
-
-            <input type="email" id="customEmail" class="custom-input" placeholder="Enter your google email..." value="${email || ''}" />
-            <button class="btn" onclick="submitCustom()">Continue with Email</button>
-          </div>
-
-          <script>
-            function selectUser(userEmail, firstName, lastName, role) {
-              if (window.opener) {
-                window.opener.postMessage({
-                  type: 'SSO_SUCCESS',
-                  email: userEmail,
-                  firstName: firstName,
-                  lastName: lastName,
-                  provider: '${providerName}',
-                  role: role,
-                  token: 'mock_token_' + Date.now()
-                }, window.location.origin);
-              }
-              window.close();
-            }
-
-            function submitCustom() {
-              var input = document.getElementById('customEmail').value.trim();
-              if (!input || !input.includes('@')) {
-                alert('Please enter a valid email address.');
-                return;
-              }
-              var namePart = input.split('@')[0];
-              var firstName = namePart.charAt(0).toUpperCase() + namePart.slice(1);
-              selectUser(input, firstName, 'User', '${selectedRole}');
-            }
-          </script>
-        </body>
-      </html>
-    `);
+  const finishAuth = (successToast: string) => {
+    toast.success(successToast);
+    const user = useAuthStore.getState().user;
+    router.replace(resolveDashboardPath(user));
   };
 
   const handleGoogleSuccess = useGoogleLogin({
@@ -328,29 +148,18 @@ export default function LoginPage() {
       const { googleLogin } = useAuthStore.getState();
       const result = await googleLogin({
         token: tokenResponse.access_token,
-        role: selectedRole,
         isSignUp: false,
       });
       setIsSubmitting(false);
 
       if (result.success) {
-        toast.success('Successfully logged in with Google!');
-        const user = useAuthStore.getState().user;
-        const isOnboarded =
-          user?.hasCompletedOnboarding === true ||
-          !!(user?.organizationId && user?.departmentId);
-        let dashboardPath = '/dashboard/student';
-        if (user?.role === 'TEACHER' || user?.role === 'FACULTY')
-          dashboardPath = '/dashboard/faculty';
-        if (user?.role === 'ADMIN' || user?.role === 'SUPER_ADMIN')
-          dashboardPath = '/dashboard/admin';
-        router.replace(isOnboarded ? dashboardPath : '/onboarding');
+        finishAuth('Successfully logged in with Google!');
       } else {
         toast.error(result.error || 'Google login failed.');
       }
     },
     onError: () => {
-      openSSOPopup('google');
+      toast.error('Google sign-in failed. Please try again or use email and password.');
     },
   });
 
@@ -358,59 +167,46 @@ export default function LoginPage() {
     try {
       handleGoogleSuccess();
     } catch {
-      openSSOPopup('google');
+      toast.error('Google sign-in is unavailable right now. Please use email and password.');
     }
   };
 
-  // SSO Message listener
-  useEffect(() => {
-    const handleMessage = async (event: MessageEvent) => {
-      if (event.origin !== window.location.origin) return;
-      if (event.data && event.data.type === 'SSO_SUCCESS') {
-        setIsSubmitting(true);
-        const result = await ssoLogin({
-          email: event.data.email || 'student@vidyaai.com',
-          firstName: event.data.firstName || 'User',
-          lastName: event.data.lastName || 'Account',
-          provider: event.data.provider || 'Google',
-          token: event.data.token,
-          role: event.data.role || selectedRole,
-          isSignUp: false,
-        });
-        setIsSubmitting(false);
-
-        if (result.success) {
-          toast.success(`Successfully logged in with ${event.data.provider || 'Google'}!`);
-          const user = useAuthStore.getState().user;
-          const isOnboarded =
-            user?.hasCompletedOnboarding === true ||
-            !!(user?.organizationId && user?.departmentId);
-          let dashboardPath = '/student';
-          if (user?.role === 'TEACHER' || user?.role === 'FACULTY')
-            dashboardPath = '/faculty';
-          if (user?.role === 'ADMIN')
-            dashboardPath = '/admin';
-          if (user?.role === 'SUPER_ADMIN')
-            dashboardPath = '/super-admin';
-          router.replace(isOnboarded ? dashboardPath : '/onboarding');
-        } else {
-          toast.error(result.error || 'Authentication failed.');
-        }
-      }
-    };
-
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
-  }, [ssoLogin, router, selectedRole]);
-
-  // Step 1: Send OTP to email
-  const handleSendCode = async (e: React.FormEvent) => {
+  const handlePasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
 
     const trimmedEmail = email.trim().toLowerCase();
     if (!trimmedEmail || !trimmedEmail.includes('@')) {
-      setErrorMessage('Please enter a valid email address.');
+      setErrorMessage('Enter a valid email address.');
+      return;
+    }
+    if (!password) {
+      setErrorMessage('Enter your password.');
+      passwordRef.current?.focus();
+      return;
+    }
+
+    setIsSubmitting(true);
+    const result = await login(trimmedEmail, password);
+    setIsSubmitting(false);
+
+    if (result.success) {
+      finishAuth('Welcome back!');
+    } else {
+      setErrorMessage(result.error || 'Invalid email or password.');
+    }
+  };
+
+  const handleSendCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMessage(null);
+
+    // OTP is only requested when the Passwordless method is active.
+    if (authMethod !== 'OTP') return;
+
+    const trimmedEmail = email.trim().toLowerCase();
+    if (!trimmedEmail || !trimmedEmail.includes('@')) {
+      setErrorMessage('Enter a valid email address.');
       return;
     }
 
@@ -419,7 +215,7 @@ export default function LoginPage() {
     setIsSubmitting(false);
 
     if (result.success) {
-      toast.success('Verification code sent to your email!');
+      toast.success('Verification code sent to your email');
       setStep('OTP');
       setResendCooldown(30);
       setOtp(['', '', '', '', '', '']);
@@ -428,7 +224,6 @@ export default function LoginPage() {
     }
   };
 
-  // Step 2: Handle single OTP digit input
   const handleOtpChange = (index: number, value: string) => {
     setErrorMessage(null);
     const digit = value.replace(/\D/g, '').slice(-1);
@@ -437,14 +232,12 @@ export default function LoginPage() {
     newOtp[index] = digit;
     setOtp(newOtp);
 
-    // Auto-advance to next input
     if (digit && index < 5) {
       otpInputsRef.current[index + 1]?.focus();
     }
 
-    // Auto-verify if all 6 digits entered
     if (digit && index === 5 && newOtp.every((d) => d !== '')) {
-      handleVerifyOtp(newOtp.join(''));
+      void handleVerifyOtp(newOtp.join(''));
     }
   };
 
@@ -475,46 +268,32 @@ export default function LoginPage() {
     otpInputsRef.current[nextIndex]?.focus();
 
     if (pasted.length === 6) {
-      handleVerifyOtp(pasted);
+      void handleVerifyOtp(pasted);
     }
   };
 
-  // Step 2: Verify OTP
   const handleVerifyOtp = async (codeToVerify?: string) => {
     const code = codeToVerify || otp.join('');
     if (code.length < 6) {
-      setErrorMessage('Please enter all 6 digits of your verification code.');
+      setErrorMessage('Enter all 6 digits of your verification code.');
       return;
     }
 
     setIsSubmitting(true);
     setErrorMessage(null);
 
-    const result = await verifyOtp(email.trim().toLowerCase(), code, selectedRole);
+    const result = await verifyOtp(email.trim().toLowerCase(), code);
     setIsSubmitting(false);
 
     if (result.success) {
-      toast.success('Successfully authenticated!');
-      const user = useAuthStore.getState().user;
-      const isOnboarded =
-        user?.hasCompletedOnboarding === true ||
-        !!(user?.organizationId && user?.departmentId);
-      let dashboardPath = '/student';
-      if (user?.role === 'TEACHER' || user?.role === 'FACULTY')
-        dashboardPath = '/faculty';
-      if (user?.role === 'ADMIN')
-        dashboardPath = '/admin';
-      if (user?.role === 'SUPER_ADMIN')
-        dashboardPath = '/super-admin';
-      router.replace(isOnboarded ? dashboardPath : '/onboarding');
+      finishAuth('Successfully authenticated!');
     } else {
-      setErrorMessage(result.error || 'Invalid or expired verification code. Please try again.');
+      setErrorMessage(result.error || 'Invalid or expired verification code. Try again.');
     }
   };
 
-  // Resend OTP
   const handleResend = async () => {
-    if (resendCooldown > 0 || isSubmitting) return;
+    if (resendCooldown > 0 || isSubmitting || authMethod !== 'OTP') return;
     setErrorMessage(null);
     setIsSubmitting(true);
 
@@ -522,7 +301,7 @@ export default function LoginPage() {
     setIsSubmitting(false);
 
     if (result.success) {
-      toast.success('New 6-digit code sent!');
+      toast.success('New 6-digit code sent');
       setResendCooldown(30);
       setOtp(['', '', '', '', '', '']);
       otpInputsRef.current[0]?.focus();
@@ -531,233 +310,371 @@ export default function LoginPage() {
     }
   };
 
+  const title =
+    step === 'OTP'
+      ? 'Enter Verification Code'
+      : 'Welcome Back';
+  const subtitle =
+    step === 'OTP'
+      ? `Enter the 6-digit code sent to ${email}`
+      : 'Sign in to access your assessment workspace';
+
   return (
-    <div className="flex min-h-screen lg:h-screen w-full bg-white font-sans text-neutral-950 antialiased selection:bg-neutral-900 selection:text-white relative overflow-x-hidden lg:overflow-hidden">
-      {/* Left Form Section */}
-      <div className="flex w-full flex-col justify-between lg:w-1/2 p-4 sm:p-6 lg:p-8 xl:p-10 h-full overflow-y-auto">
-        {/* Header Branding */}
-        <div className="flex items-center w-full">
+    <div className="relative flex min-h-dvh w-full overflow-x-hidden bg-white font-sans text-neutral-950 antialiased selection:bg-neutral-900 selection:text-white lg:h-dvh lg:overflow-hidden">
+      <div className="flex h-full w-full flex-col justify-between overflow-y-auto p-4 sm:p-6 lg:w-1/2 lg:p-8 xl:p-10">
+        <div className="flex w-full items-center">
           <Link
             href="/"
-            className="flex items-center gap-2 text-base sm:text-lg font-bold tracking-tight text-neutral-950 hover:opacity-80 transition-opacity"
+            className="flex items-center gap-2 text-base font-bold tracking-tight text-neutral-950 transition-opacity duration-150 hover:opacity-80 sm:text-lg"
           >
-            <img
-              src="/logo.png"
-              alt="VidyaAI Logo"
-              className="w-7 h-7 object-contain"
-            />
+            <img src="/logo.png" alt="VidyaAI Logo" className="h-7 w-7 object-contain" />
             VIDYA AI
           </Link>
         </div>
 
-        {/* Form Container */}
-        <div className="flex flex-1 items-center justify-center py-4 sm:py-6 my-auto">
+        <div className="my-auto flex flex-1 items-center justify-center py-4 sm:py-6">
           <motion.div
             variants={containerVariants}
             initial="hidden"
             animate="visible"
             className="w-full max-w-[360px] sm:max-w-[390px]"
           >
-            {/* Titles */}
-            <motion.div variants={itemVariants} className="mb-3.5 sm:mb-4 text-center">
-              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-neutral-900">
-                {step === 'EMAIL' ? 'Welcome Back' : 'Enter Verification Code'}
+            <motion.div variants={itemVariants} className="mb-5 text-center sm:mb-6">
+              <h1 className="text-balance text-[28px] font-bold tracking-[-0.03em] text-neutral-900 sm:text-[32px]">
+                {title}
               </h1>
-              <p className="text-xs text-neutral-500 mt-1">
-                {step === 'EMAIL'
-                  ? 'Sign in to access your assessment workspace'
-                  : `Enter the 6-digit code sent to ${email}`}
+              <p className="mt-1.5 text-pretty text-[13px] leading-relaxed text-neutral-500">
+                {subtitle}
               </p>
             </motion.div>
 
-            {/* Role Switcher */}
-            {step === 'EMAIL' && (
-              <motion.div variants={itemVariants} className="mb-3.5 sm:mb-4">
-                <div className="flex rounded-full bg-neutral-100 p-1 border border-neutral-200/70">
-                  {(['STUDENT', 'TEACHER', 'ADMIN'] as const).map((r) => (
-                    <button
-                      key={r}
-                      type="button"
-                      onClick={() => setSelectedRole(r)}
-                      className={`flex-1 rounded-full py-1.5 text-xs font-semibold transition-all ${
-                        selectedRole === r
-                          ? 'bg-white text-neutral-950 shadow-sm'
-                          : 'text-neutral-500 hover:text-neutral-900'
-                      }`}
-                    >
-                      {r === 'TEACHER' ? 'Faculty' : r === 'ADMIN' ? 'Admin' : 'Student'}
-                    </button>
-                  ))}
-                </div>
-              </motion.div>
-            )}
-
-            {/* Google Login Button */}
-            {step === 'EMAIL' && (
-              <motion.div variants={itemVariants} className="mb-3 sm:mb-4">
-                <button
-                  type="button"
-                  onClick={handleGoogleAuth}
-                  disabled={isSubmitting}
-                  className="flex w-full items-center justify-center gap-2.5 rounded-full border border-neutral-200 bg-white px-4 py-2.5 text-xs sm:text-sm font-medium text-neutral-700 transition-colors hover:bg-neutral-50 active:bg-neutral-100 disabled:opacity-50 shadow-sm"
-                >
-                  <GoogleIcon className="text-base sm:text-lg" />
-                  <span>Login with Google</span>
-                </button>
-              </motion.div>
-            )}
-
-            {/* Divider */}
-            {step === 'EMAIL' && (
-              <motion.div
-                variants={itemVariants}
-                className="relative my-3 sm:my-4 flex items-center"
-              >
-                <div className="grow border-t border-neutral-200"></div>
-                <span className="px-3 text-xs uppercase tracking-wider text-neutral-400 font-medium">or email code</span>
-                <div className="grow border-t border-neutral-200"></div>
-              </motion.div>
-            )}
-
-            {/* Error Banner */}
-            {errorMessage && (
-              <motion.div
-                initial={{ opacity: 0, y: -6 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="mb-3 p-3 rounded-xl bg-red-50 border border-red-200/80 text-red-700 text-xs flex items-start gap-2"
-              >
-                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-500" />
-                <span className="leading-relaxed">{errorMessage}</span>
-              </motion.div>
-            )}
-
-            {/* STEP 1: EMAIL INPUT */}
-            {step === 'EMAIL' && (
-              <form onSubmit={handleSendCode} className="flex flex-col gap-3">
-                <motion.div variants={itemVariants} className="flex flex-col gap-1">
-                  <label
-                    htmlFor="email"
-                    className="text-xs font-semibold text-neutral-700 tracking-wide"
+            {step === 'CREDENTIALS' && (
+              <>
+                <motion.div variants={itemVariants} className="mb-3 sm:mb-4">
+                  <button
+                    type="button"
+                    onClick={handleGoogleAuth}
+                    disabled={isSubmitting}
+                    className={secondaryBtnClass}
                   >
-                    Work or Student Email
-                  </label>
-                  <div className="relative">
-                    <input
-                      id="email"
-                      type="email"
-                      required
-                      value={email}
-                      onChange={(e) => {
-                        setEmail(e.target.value);
-                        setErrorMessage(null);
-                      }}
-                      placeholder="name@university.edu or gmail.com"
-                      disabled={isSubmitting}
-                      className="w-full rounded-xl border border-neutral-200 bg-neutral-50/50 px-3.5 py-2.5 text-xs sm:text-sm text-neutral-900 placeholder:text-neutral-400 transition-all focus:border-neutral-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-neutral-900 pl-10"
-                    />
-                    <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
-                  </div>
+                    <GoogleIcon className="text-lg" />
+                    <span>Continue with Google</span>
+                  </button>
                 </motion.div>
 
-                <motion.div variants={itemVariants} className="mt-1">
+                <motion.div
+                  variants={itemVariants}
+                  className="relative my-3 flex items-center sm:my-4"
+                >
+                  <div className="grow border-t border-neutral-200" />
+                  <span className="px-3 text-[11px] font-medium uppercase tracking-[0.08em] text-neutral-400">
+                    or email
+                  </span>
+                  <div className="grow border-t border-neutral-200" />
+                </motion.div>
+
+                {/* Auth method segmented control — Password | Passwordless */}
+                <motion.div variants={itemVariants} className="mb-4">
+                  <div
+                    role="tablist"
+                    aria-label="Sign-in method"
+                    className="relative grid grid-cols-2 rounded-full bg-neutral-100/90 p-1 ring-1 ring-neutral-200/80"
+                  >
+                    {([
+                      { id: 'PASSWORD' as const, label: 'Password' },
+                      { id: 'OTP' as const, label: 'Passwordless' },
+                    ]).map((option) => {
+                      const selected = authMethod === option.id;
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          role="tab"
+                          aria-selected={selected}
+                          onClick={() => switchAuthMethod(option.id)}
+                          className={`relative z-10 rounded-full py-2 text-[13px] font-semibold tracking-[-0.01em] transition-colors duration-150 ${
+                            selected
+                              ? 'text-neutral-950'
+                              : 'text-neutral-500 hover:text-neutral-800'
+                          }`}
+                        >
+                          {selected && (
+                            <motion.span
+                              layoutId={reduceMotion ? undefined : 'auth-method-pill'}
+                              className="absolute inset-0 -z-10 rounded-full bg-white shadow-[0_1px_2px_rgba(0,0,0,0.06),0_4px_12px_rgba(0,0,0,0.04)] ring-1 ring-black/5"
+                              transition={spring}
+                            />
+                          )}
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-2 text-center text-[11px] leading-relaxed text-neutral-400">
+                    {authMethod === 'PASSWORD'
+                      ? 'Use the password you created at registration.'
+                      : 'We’ll email a code only after you request it.'}
+                  </p>
+                </motion.div>
+              </>
+            )}
+
+            <AnimatePresence mode="wait" initial={false}>
+              {errorMessage && (
+                <motion.div
+                  key={errorMessage}
+                  initial={{ opacity: 0, y: reduceMotion ? 0 : -6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.18, ease: [0.23, 1, 0.32, 1] }}
+                  className="mb-3 flex items-start gap-2 rounded-[14px] border border-red-200/80 bg-red-50 px-3 py-2.5 text-[13px] text-red-700"
+                  role="alert"
+                >
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
+                  <span className="leading-relaxed">{errorMessage}</span>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            <AnimatePresence mode="wait" initial={false}>
+              {step === 'CREDENTIALS' && authMethod === 'PASSWORD' && (
+                <motion.form
+                  key="password-form"
+                  variants={panelVariants}
+                  initial="initial"
+                  animate="animate"
+                  exit="exit"
+                  onSubmit={handlePasswordLogin}
+                  className="flex flex-col gap-3"
+                >
+                  <div className="flex flex-col gap-1.5">
+                    <label htmlFor="email" className="text-[12px] font-semibold tracking-wide text-neutral-700">
+                      Email
+                    </label>
+                    <div className="relative">
+                      <input
+                        id="email"
+                        type="email"
+                        autoComplete="email"
+                        required
+                        value={email}
+                        onChange={(e) => {
+                          setEmail(e.target.value);
+                          setErrorMessage(null);
+                        }}
+                        placeholder="name@university.edu"
+                        disabled={isSubmitting}
+                        className={`${fieldClass} pl-10`}
+                      />
+                      <Mail className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between">
+                      <label htmlFor="password" className="text-[12px] font-semibold tracking-wide text-neutral-700">
+                        Password
+                      </label>
+                      <Link
+                        href="/forgot-password"
+                        className="text-[12px] font-medium text-neutral-500 transition-colors duration-150 hover:text-neutral-900"
+                      >
+                        Forgot password?
+                      </Link>
+                    </div>
+                    <div className="relative">
+                      <input
+                        id="password"
+                        ref={passwordRef}
+                        type={showPassword ? 'text' : 'password'}
+                        autoComplete="current-password"
+                        required
+                        value={password}
+                        onChange={(e) => {
+                          setPassword(e.target.value);
+                          setErrorMessage(null);
+                        }}
+                        placeholder="Enter your password"
+                        disabled={isSubmitting}
+                        className={`${fieldClass} pl-10 pr-11`}
+                      />
+                      <Lock className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword((v) => !v)}
+                        className="absolute right-2 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full text-neutral-400 transition-colors duration-150 hover:text-neutral-700"
+                        aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      >
+                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="pt-1">
+                    <button
+                      type="submit"
+                      disabled={isSubmitting || !email.trim() || !password}
+                      className={primaryBtnClass}
+                    >
+                      {isSubmitting ? (
+                        <>
+                          <RefreshCw className="h-4 w-4 animate-spin" />
+                          <span>Signing in…</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>Sign In</span>
+                          <ArrowRight className="h-4 w-4" />
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </motion.form>
+              )}
+
+              {step === 'CREDENTIALS' && authMethod === 'OTP' && (
+                <motion.form
+                  key="otp-request-form"
+                  variants={panelVariants}
+                  initial="initial"
+                  animate="animate"
+                  exit="exit"
+                  onSubmit={handleSendCode}
+                  className="flex flex-col gap-3"
+                >
+                  <div className="flex flex-col gap-1.5">
+                    <label htmlFor="otp-email" className="text-[12px] font-semibold tracking-wide text-neutral-700">
+                      Email
+                    </label>
+                    <div className="relative">
+                      <input
+                        id="otp-email"
+                        type="email"
+                        autoComplete="email"
+                        required
+                        value={email}
+                        onChange={(e) => {
+                          setEmail(e.target.value);
+                          setErrorMessage(null);
+                        }}
+                        placeholder="name@university.edu"
+                        disabled={isSubmitting}
+                        className={`${fieldClass} pl-10`}
+                      />
+                      <Mail className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
+                    </div>
+                  </div>
+
+                  <div className="pt-1">
+                    <button
+                      type="submit"
+                      disabled={isSubmitting || !email.trim()}
+                      className={primaryBtnClass}
+                    >
+                      {isSubmitting ? (
+                        <>
+                          <RefreshCw className="h-4 w-4 animate-spin" />
+                          <span>Sending code…</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>Send 6-Digit Code</span>
+                          <ArrowRight className="h-4 w-4" />
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </motion.form>
+              )}
+
+              {step === 'OTP' && (
+                <motion.div
+                  key="otp-verify"
+                  variants={panelVariants}
+                  initial="initial"
+                  animate="animate"
+                  exit="exit"
+                  className="flex flex-col gap-4"
+                >
+                  <div
+                    className="flex justify-center gap-2 sm:gap-2.5"
+                    onPaste={handleOtpPaste}
+                  >
+                    {otp.map((digit, i) => (
+                      <input
+                        key={i}
+                        ref={(el) => {
+                          otpInputsRef.current[i] = el;
+                        }}
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        maxLength={1}
+                        value={digit}
+                        onChange={(e) => handleOtpChange(i, e.target.value)}
+                        onKeyDown={(e) => handleOtpKeyDown(i, e)}
+                        disabled={isSubmitting}
+                        aria-label={`Digit ${i + 1}`}
+                        className={`h-12 w-11 rounded-[14px] border bg-neutral-50/70 text-center font-mono text-lg font-bold text-neutral-900 tabular-nums transition-[border-color,background-color,box-shadow] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] focus:bg-white focus:outline-none sm:h-14 sm:w-12 sm:text-xl ${
+                          digit
+                            ? 'border-neutral-900 bg-white ring-1 ring-neutral-900'
+                            : 'border-neutral-200 focus:border-neutral-900 focus:ring-1 focus:ring-neutral-900'
+                        }`}
+                      />
+                    ))}
+                  </div>
+
                   <button
-                    type="submit"
-                    disabled={isSubmitting || !email.trim()}
-                    className="flex w-full items-center justify-center gap-2 rounded-full bg-neutral-900 py-2.5 text-xs sm:text-sm font-semibold text-white transition-all hover:bg-neutral-800 active:scale-[0.99] disabled:opacity-50 shadow-sm"
+                    type="button"
+                    onClick={() => void handleVerifyOtp()}
+                    disabled={isSubmitting || otp.some((d) => !d)}
+                    className={primaryBtnClass}
                   >
                     {isSubmitting ? (
                       <>
                         <RefreshCw className="h-4 w-4 animate-spin" />
-                        <span>Sending Code...</span>
+                        <span>Verifying…</span>
                       </>
                     ) : (
                       <>
-                        <span>Send 6-Digit Code</span>
-                        <ArrowRight className="h-4 w-4" />
+                        <KeyRound className="h-4 w-4" />
+                        <span>Verify & Continue</span>
                       </>
                     )}
                   </button>
-                </motion.div>
-              </form>
-            )}
 
-            {/* STEP 2: 6-DIGIT OTP INPUT */}
-            {step === 'OTP' && (
-              <motion.div variants={itemVariants} className="flex flex-col gap-4">
-                <div className="flex justify-center gap-2 sm:gap-2.5" onPaste={handleOtpPaste}>
-                  {otp.map((digit, i) => (
-                    <input
-                      key={i}
-                      ref={(el) => {
-                        otpInputsRef.current[i] = el;
+                  <div className="flex items-center justify-between pt-1 text-[12px] text-neutral-500">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setStep('CREDENTIALS');
+                        setErrorMessage(null);
+                        setOtp(['', '', '', '', '', '']);
                       }}
-                      type="text"
-                      inputMode="numeric"
-                      pattern="[0-9]*"
-                      maxLength={1}
-                      value={digit}
-                      onChange={(e) => handleOtpChange(i, e.target.value)}
-                      onKeyDown={(e) => handleOtpKeyDown(i, e)}
-                      disabled={isSubmitting}
-                      className={`w-11 h-12 sm:w-12 sm:h-14 text-center text-lg sm:text-xl font-mono font-bold rounded-xl border bg-neutral-50/50 text-neutral-900 transition-all focus:bg-white focus:outline-none ${
-                        digit
-                          ? 'border-neutral-900 bg-white ring-1 ring-neutral-900'
-                          : 'border-neutral-200 focus:border-neutral-900 focus:ring-1 focus:ring-neutral-900'
-                      }`}
-                    />
-                  ))}
-                </div>
+                      className="text-neutral-600 underline decoration-neutral-300 underline-offset-2 transition-colors duration-150 hover:text-neutral-900"
+                    >
+                      Change email
+                    </button>
 
-                <button
-                  type="button"
-                  onClick={() => handleVerifyOtp()}
-                  disabled={isSubmitting || otp.some((d) => !d)}
-                  className="flex w-full items-center justify-center gap-2 rounded-full bg-neutral-900 py-2.5 text-xs sm:text-sm font-semibold text-white transition-all hover:bg-neutral-800 active:scale-[0.99] disabled:opacity-50 shadow-sm"
-                >
-                  {isSubmitting ? (
-                    <>
-                      <RefreshCw className="h-4 w-4 animate-spin" />
-                      <span>Verifying...</span>
-                    </>
-                  ) : (
-                    <>
-                      <KeyRound className="h-4 w-4" />
-                      <span>Verify & Continue</span>
-                    </>
-                  )}
-                </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleResend()}
+                      disabled={resendCooldown > 0 || isSubmitting}
+                      className="font-medium text-neutral-900 transition-colors duration-150 hover:underline disabled:text-neutral-400 disabled:no-underline"
+                    >
+                      {resendCooldown > 0 ? `Resend in ${resendCooldown}s` : 'Resend code'}
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
-                <div className="flex items-center justify-between text-xs text-neutral-500 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setStep('EMAIL');
-                      setErrorMessage(null);
-                    }}
-                    className="text-neutral-600 hover:text-neutral-900 underline transition-colors"
-                  >
-                    Change email
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleResend}
-                    disabled={resendCooldown > 0 || isSubmitting}
-                    className="font-medium text-neutral-900 hover:underline disabled:text-neutral-400 disabled:no-underline transition-colors"
-                  >
-                    {resendCooldown > 0 ? `Resend code in ${resendCooldown}s` : 'Resend code'}
-                  </button>
-                </div>
-              </motion.div>
-            )}
-
-            {/* Bottom Footer Link */}
             <motion.div variants={itemVariants} className="mt-6 text-center">
-              <p className="text-xs text-neutral-500">
+              <p className="text-[13px] text-neutral-500">
                 Don&apos;t have an account?{' '}
                 <Link
                   href="/register"
-                  className="font-semibold text-neutral-900 hover:underline"
+                  className="font-semibold text-neutral-900 underline decoration-neutral-300 underline-offset-2 transition-colors duration-150 hover:decoration-neutral-900"
                 >
                   Create one
                 </Link>
@@ -766,36 +683,34 @@ export default function LoginPage() {
           </motion.div>
         </div>
 
-        {/* Legal Footer */}
-        <div className="flex flex-col sm:flex-row items-center justify-between text-[11px] text-neutral-400 gap-2 border-t border-neutral-100 pt-3">
+        <div className="flex flex-col items-center justify-between gap-2 border-t border-neutral-100 pt-3 text-[11px] text-neutral-400 sm:flex-row">
           <span>&copy; {new Date().getFullYear()} Vidya AI. All rights reserved.</span>
           <div className="flex gap-4">
-            <Link href="/privacy" className="hover:text-neutral-600 transition-colors">
+            <Link href="/privacy" className="transition-colors duration-150 hover:text-neutral-600">
               Privacy Policy
             </Link>
-            <Link href="/terms" className="hover:text-neutral-600 transition-colors">
+            <Link href="/terms" className="transition-colors duration-150 hover:text-neutral-600">
               Terms of Service
             </Link>
           </div>
         </div>
       </div>
 
-      {/* Right Image Section */}
-      <div className="hidden lg:block lg:w-1/2 p-3 sm:p-4 lg:p-5 h-full">
-        <div className="relative h-full w-full overflow-hidden rounded-[1.75rem] shadow-inner bg-neutral-900">
+      <div className="hidden h-full p-3 sm:p-4 lg:block lg:w-1/2 lg:p-5">
+        <div className="relative h-full w-full overflow-hidden rounded-[1.75rem] bg-neutral-900 shadow-inner">
           <img
             src="https://assets.watermelon.sh/auth-7.avif"
             alt="Vidya AI Authentication"
             className="h-full w-full object-cover object-center"
           />
-          <div className="absolute inset-0 bg-linear-to-t from-black/75 via-black/15 to-transparent flex flex-col justify-end p-8 xl:p-10 text-white">
-            <span className="text-xs uppercase tracking-widest font-semibold text-neutral-300 mb-1.5">
+          <div className="absolute inset-0 flex flex-col justify-end bg-linear-to-t from-black/75 via-black/15 to-transparent p-8 text-white xl:p-10">
+            <span className="mb-1.5 text-xs font-semibold uppercase tracking-widest text-neutral-300">
               Empowering Education
             </span>
-            <h2 className="text-2xl xl:text-3xl font-bold mb-2 tracking-tight">
+            <h2 className="mb-2 text-balance text-2xl font-bold tracking-[-0.02em] xl:text-3xl">
               Transform Higher Education
             </h2>
-            <p className="text-xs sm:text-sm text-neutral-200 leading-relaxed max-w-md">
+            <p className="max-w-md text-pretty text-xs leading-relaxed text-neutral-200 sm:text-sm">
               Create AI-driven question papers, conduct rubric-based automated evaluations, and elevate institutional learning outcomes.
             </p>
           </div>

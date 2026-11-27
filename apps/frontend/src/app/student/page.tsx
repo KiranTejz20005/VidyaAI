@@ -19,7 +19,8 @@ import {
   ArrowUpRight,
 } from 'lucide-react';
 import Link from 'next/link';
-import { LoadingState } from '@/design-system/LoadingState';
+import { Skeleton } from '@/design-system/LoadingState';
+import { PageHeader } from '@/design-system/PageHeader';
 import { ErrorState } from '@/design-system/ErrorState';
 import { Button } from '@/components/ui/button';
 
@@ -78,7 +79,19 @@ export default function StudentDashboard() {
     fetchDashboard();
   }, []);
 
-  if (loading) return <LoadingState lines={8} />;
+  if (loading) {
+    return (
+      <div role="status" aria-busy="true" aria-label="Loading dashboard" className="flex flex-col gap-6 p-4 md:p-8 max-w-[1600px] mx-auto">
+        <Skeleton height={32} width="min(320px, 70%)" radius={12} />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {[1, 2, 3, 4].map((i) => (
+            <Skeleton key={i} height={136} radius={16} />
+          ))}
+        </div>
+        <Skeleton height={280} radius={16} />
+      </div>
+    );
+  }
   if (error) return <ErrorState message={error} onRetry={fetchDashboard} />;
 
   const dash = data || {
@@ -110,48 +123,36 @@ export default function StudentDashboard() {
   return (
     <div className="flex flex-col gap-6 p-4 md:p-8 max-w-[1600px] mx-auto text-slate-900 font-sans">
       {/* ── 1. Header Greeting Section (Exact Admin Layout) ── */}
-      <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-        <div className="flex flex-col gap-1.5">
-          <h1 className="text-2xl md:text-3xl font-semibold tracking-tight text-neutral-900">
-            Good Morning, {dash.user.firstName} {dash.user.lastName || ''}
-          </h1>
-          <div className="flex items-center gap-2 text-sm text-neutral-500 font-medium">
-            <Calendar className="size-4 text-neutral-400" />
-            <span>{todayFormatted}</span>
-            <span className="text-neutral-300">•</span>
-            <span className="text-neutral-500 font-normal">
-              {weeklyProgress}% weekly goals completed
-              {dash.nextTest ? ` • Next test in ${dash.nextTest.daysLeft} days` : ''}
-            </span>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2.5">
-          <Link href="/student/tutor/default">
-            <Button
-              type="button"
-              variant="outline"
-              className="h-9.5 rounded-xl px-3.5 text-xs font-semibold border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50 shadow-xs"
-            >
-              <BookOpen className="size-4 mr-1.5 text-indigo-600" />
-              AI Tutor
-            </Button>
-          </Link>
-
-          <Link href="/student/practice">
-            <Button
-              type="button"
-              className="h-9.5 rounded-xl px-4 text-xs font-semibold bg-[#e05934] hover:bg-[#c94a2a] text-white shadow-xs"
-            >
-              <Sparkles className="size-4 mr-1" />
-              Start Practice Quiz
-            </Button>
-          </Link>
-        </div>
-      </section>
+      <PageHeader
+        title={`Good Morning, ${dash.user.firstName} ${dash.user.lastName || ''}`.trim()}
+        subtitle={`${todayFormatted} • ${weeklyProgress}% weekly goals completed${dash.nextTest ? ` • Next test in ${dash.nextTest.daysLeft} days` : ''}`}
+        actions={
+          <>
+            <Link href="/student/tutor/default" className="ds-focus rounded-xl">
+              <Button
+                type="button"
+                variant="outline"
+                className="ds-press min-h-10 rounded-xl px-3.5 text-xs font-semibold border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50 shadow-xs"
+              >
+                <BookOpen className="size-4 mr-1.5 text-indigo-600" aria-hidden />
+                AI Tutor
+              </Button>
+            </Link>
+            <Link href="/student/practice" className="ds-focus rounded-xl">
+              <Button
+                type="button"
+                className="ds-press min-h-10 rounded-xl px-4 text-xs font-semibold bg-[#e05934] hover:bg-[#c94a2a] text-white shadow-xs"
+              >
+                <Sparkles className="size-4 mr-1" aria-hidden />
+                Start Practice Quiz
+              </Button>
+            </Link>
+          </>
+        }
+      />
 
       {/* ── 2. Top 4 Metric Cards (Clean, exact Admin layout) ── */}
-      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <section className="ds-stagger grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {/* Card 1: Attendance */}
         <article className="flex h-34 flex-col justify-between rounded-2xl border border-neutral-200/90 bg-white p-5 shadow-xs transition-all hover:shadow-sm">
           <div className="flex items-start justify-between gap-3">
@@ -164,7 +165,7 @@ export default function StudentDashboard() {
           </div>
           <div className="flex items-end justify-between gap-2">
             <div>
-              <p className="text-2xl font-bold tracking-tight text-neutral-900">
+              <p className="text-2xl font-bold tracking-tight text-neutral-900 tabular-nums">
                 {attendance}%
               </p>
               <p className="mt-1 text-xs font-medium text-neutral-500 flex items-center gap-1">
@@ -197,7 +198,7 @@ export default function StudentDashboard() {
           </div>
           <div className="flex items-end justify-between gap-2">
             <div>
-              <p className="text-2xl font-bold tracking-tight text-neutral-900">
+              <p className="text-2xl font-bold tracking-tight text-neutral-900 tabular-nums">
                 {rank > 0 ? `#${rank}` : '—'}
               </p>
               <p className="mt-1 text-xs font-medium text-neutral-500">
@@ -223,7 +224,7 @@ export default function StudentDashboard() {
           </div>
           <div className="flex items-end justify-between gap-2">
             <div>
-              <p className="text-2xl font-bold tracking-tight text-neutral-900">
+              <p className="text-2xl font-bold tracking-tight text-neutral-900 tabular-nums">
                 {streak} {streak === 1 ? 'Day' : 'Days'}
               </p>
               <p className="mt-1 text-xs font-medium text-neutral-500 flex items-center gap-1">
@@ -253,7 +254,7 @@ export default function StudentDashboard() {
           </div>
           <div className="flex items-end justify-between gap-2">
             <div>
-              <p className="text-2xl font-bold tracking-tight text-neutral-900">
+              <p className="text-2xl font-bold tracking-tight text-neutral-900 tabular-nums">
                 {weeklyProgress}%
               </p>
               <p className="mt-1 text-xs font-medium text-neutral-500 flex items-center gap-1">
@@ -269,7 +270,7 @@ export default function StudentDashboard() {
       </section>
 
       {/* ── 3. Main Dashboard Body (Left & Right Columns) ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="ds-stagger grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left Column (Span 2) */}
         <div className="lg:col-span-2 space-y-6">
           {/* Active Assignments Card */}

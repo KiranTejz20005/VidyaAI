@@ -1,16 +1,21 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { api } from '@/lib/api';
+import { getEvaluationResult, overrideGrade, evaluateSubmission } from '@/services/grading.service';
 import { useRouter, useParams } from 'next/navigation';
 import { Card } from '@/design-system/Card';
 import { Button } from '@/design-system/Button';
+import { PageHeader } from '@/design-system/PageHeader';
+import { EmptyState } from '@/design-system/EmptyState';
+import { ErrorState } from '@/design-system/ErrorState';
+import { Skeleton } from '@/design-system/LoadingState';
 import { ChevronLeft, Bot, User, Edit3 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export default function SubmissionEvaluationPage() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [overrideMode, setOverrideMode] = useState(false);
   const [overrideScore, setOverrideScore] = useState('');
   const [overrideReason, setOverrideReason] = useState('');
@@ -24,14 +29,15 @@ export default function SubmissionEvaluationPage() {
   const fetchEvaluation = async () => {
     try {
       setLoading(true);
-      const res = await api.get(`/grader/submissions/${subId}/evaluate`);
-      if (res.data?.success) {
-        setData(res.data.data);
+      setLoadError(null);
+      setData(await getEvaluationResult(subId));
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        setData(null);
       } else {
-        toast.error('Evaluation not found');
+        setLoadError('Failed to load evaluation details');
+        toast.error('Failed to load evaluation details');
       }
-    } catch (err) {
-      toast.error('Failed to load evaluation details');
     } finally {
       setLoading(false);
     }
@@ -45,17 +51,15 @@ export default function SubmissionEvaluationPage() {
     if (!overrideScore) return toast.error('Score is required');
     try {
       setSubmittingOverride(true);
-      const res = await api.post(`/grader/submissions/${subId}/override`, {
-        overrideScore: Number(overrideScore),
-        reason: overrideReason
+      await overrideGrade(subId, {
+        score: Number(overrideScore),
+        reason: overrideReason || 'Manual teacher grade override',
       });
-      if (res.data?.success) {
-        toast.success('Grade overridden successfully');
-        setOverrideMode(false);
-        fetchEvaluation();
-      }
+      toast.success('Grade overridden successfully');
+      setOverrideMode(false);
+      fetchEvaluation();
     } catch (err: any) {
-      toast.error(err.response?.data?.error || 'Failed to override grade');
+      toast.error(err.response?.data?.error || err.response?.data?.message || 'Failed to override grade');
     } finally {
       setSubmittingOverride(false);
     }
@@ -65,65 +69,72 @@ export default function SubmissionEvaluationPage() {
     try {
       setLoading(true);
       toast.success('Running AI Evaluation...');
-      const res = await api.post(`/grader/submissions/${subId}/evaluate`);
-      if (res.data?.success) {
-        toast.success('Evaluation completed!');
-        fetchEvaluation();
-      }
+      await evaluateSubmission(subId);
+      toast.success('Evaluation completed!');
+      fetchEvaluation();
     } catch (err: any) {
-      toast.error(err.response?.data?.error || 'Failed to evaluate');
+      toast.error(err.response?.data?.error || err.response?.data?.message || 'Failed to evaluate');
       setLoading(false);
     }
   };
 
   if (loading) {
-    return <div style={{ padding: 20 }}>Loading evaluation details...</div>;
+    return (
+      <div role="status" aria-busy="true" aria-label="Loading evaluation" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <Skeleton height={32} width="40%" radius={8} />
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: 24 }}>
+          <Skeleton height={360} radius={12} />
+          <Skeleton height={360} radius={12} />
+        </div>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return <ErrorState message={loadError} onRetry={fetchEvaluation} />;
   }
 
   if (!data) {
     return (
-      <div style={{ padding: 40, textAlign: 'center' }}>
-        <h3 style={{ fontSize: 20, fontWeight: 600, marginBottom: 8 }}>No AI Evaluation Yet</h3>
-        <p style={{ color: 'var(--text-secondary)', marginBottom: 24 }}>This submission has not been graded by the AI yet.</p>
-        <Button variant="primary" onClick={handleRunEvaluation}>
-          <Bot size={16} style={{ marginRight: 8 }} /> Run AI Evaluation
-        </Button>
-      </div>
+      <EmptyState
+        icon={<Bot size={40} aria-hidden />}
+        title="No AI Evaluation Yet"
+        description="This submission has not been graded by the AI yet."
+        action={handleRunEvaluation}
+        actionLabel="Run AI Evaluation"
+      />
     );
   }
 
   const { submission, score, totalMarks, generalFeedback, criteriaGrades, teacherOverride, studentText, rubricCriteria } = data;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 24, height: 'calc(100vh - 120px)' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <button onClick={() => router.push(`/teacher/assessments/${assignmentId}/submissions`)} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <ChevronLeft size={20} color="var(--text-secondary)" />
-          </button>
-          <div>
-            <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0, color: 'var(--text-primary)' }}>Submission Evaluation</h1>
-            <p style={{ fontSize: 14, color: 'var(--text-secondary)', margin: '4px 0 0 0' }}>Review AI feedback and student work.</p>
-          </div>
-        </div>
-        
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-          <div style={{ background: teacherOverride ? '#FEF3C7' : '#D1FAE5', padding: '8px 16px', borderRadius: 8, border: `1px solid ${teacherOverride ? '#F59E0B' : '#10B981'}`, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 14, fontWeight: 600, color: teacherOverride ? '#92400E' : '#065F46' }}>Final Score:</span>
-            <span style={{ fontSize: 24, fontWeight: 800, color: teacherOverride ? '#B45309' : '#047857' }}>{score} / {totalMarks}</span>
-            {teacherOverride && <span style={{ fontSize: 12, background: '#F59E0B', color: 'white', padding: '2px 6px', borderRadius: 12, marginLeft: 8 }}>Overridden</span>}
-          </div>
-          {!overrideMode && (
-            <Button variant="outline" onClick={() => setOverrideMode(true)}>
-              <Edit3 size={16} style={{ marginRight: 8 }} /> Manual Override
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 24, }}>
+      <PageHeader
+        title="Submission Evaluation"
+        subtitle="Review AI feedback and student work."
+        actions={
+          <>
+            <Button variant="outline" onClick={() => router.push(`/teacher/assessments/${assignmentId}/submissions`)}>
+              <ChevronLeft size={16} style={{ marginRight: 4 }} aria-hidden /> Submissions
             </Button>
-          )}
-        </div>
-      </div>
+            <div style={{ background: teacherOverride ? '#FEF3C7' : '#D1FAE5', padding: '8px 16px', borderRadius: 8, border: `1px solid ${teacherOverride ? '#F59E0B' : '#10B981'}`, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 14, fontWeight: 600, color: teacherOverride ? '#92400E' : '#065F46' }}>Final Score:</span>
+              <span className="tabular-nums" style={{ fontSize: 24, fontWeight: 800, color: teacherOverride ? '#B45309' : '#047857' }}>{score} / {totalMarks}</span>
+              {teacherOverride && <span style={{ fontSize: 12, background: '#F59E0B', color: 'white', padding: '2px 6px', borderRadius: 12, marginLeft: 8 }}>Overridden</span>}
+            </div>
+            {!overrideMode && (
+              <Button variant="outline" onClick={() => setOverrideMode(true)}>
+                <Edit3 size={16} style={{ marginRight: 8 }} aria-hidden /> Manual Override
+              </Button>
+            )}
+          </>
+        }
+      />
 
-      <div style={{ display: 'flex', gap: 24, flex: 1, minHeight: 0 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 340px), 1fr))', gap: 24, alignItems: 'stretch' }}>
         {/* Left Side: Student Work */}
-        <Card padding="0" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <Card padding="0" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', maxHeight: 'min(70vh, 720px)' }}>
           <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--border)', background: 'var(--bg-muted)', display: 'flex', alignItems: 'center', gap: 8 }}>
             <User size={18} color="var(--text-secondary)" />
             <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--text-primary)' }}>Student Submission Text</span>
@@ -134,7 +145,7 @@ export default function SubmissionEvaluationPage() {
         </Card>
 
         {/* Right Side: AI Evaluation */}
-        <Card padding="0" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <Card padding="0" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', maxHeight: 'min(70vh, 720px)' }}>
           <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--border)', background: '#F0F9FF', display: 'flex', alignItems: 'center', gap: 8 }}>
             <Bot size={18} color="#0284C7" />
             <span style={{ fontWeight: 700, fontSize: 14, color: '#0369A1' }}>AI Grading Breakdown</span>
@@ -145,10 +156,10 @@ export default function SubmissionEvaluationPage() {
             {overrideMode && (
               <div style={{ background: '#FFFBEB', border: '1px solid #FCD34D', padding: 16, borderRadius: 8 }}>
                 <h3 style={{ fontSize: 14, fontWeight: 700, color: '#92400E', marginBottom: 12 }}>Manual Grade Override</h3>
-                <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
-                  <div style={{ flex: 1 }}>
-                    <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#B45309', marginBottom: 4 }}>New Score</label>
-                    <input 
+                <div style={{ display: 'flex', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+                  <div style={{ flex: '1 1 100px' }}>
+                    <label htmlFor="override-score" style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#B45309', marginBottom: 4 }}>New Score</label>
+                    <input id="override-score" 
                       type="number" 
                       value={overrideScore} 
                       onChange={e => setOverrideScore(e.target.value)} 
@@ -156,9 +167,9 @@ export default function SubmissionEvaluationPage() {
                       max={totalMarks}
                     />
                   </div>
-                  <div style={{ flex: 2 }}>
-                    <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#B45309', marginBottom: 4 }}>Reason for Override</label>
-                    <input 
+                  <div style={{ flex: '2 1 200px' }}>
+                    <label htmlFor="override-reason" style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#B45309', marginBottom: 4 }}>Reason for Override</label>
+                    <input id="override-reason" 
                       type="text" 
                       value={overrideReason} 
                       onChange={e => setOverrideReason(e.target.value)} 
