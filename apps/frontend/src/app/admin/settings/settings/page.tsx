@@ -1,7 +1,12 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { api } from '@/lib/api';
+import {
+  getGlobalSettings,
+  getOrganizationSettings,
+  updateGlobalSettings,
+  updateOrganizationSettings,
+} from '@/services/settings.service';
 import { 
   Building2, 
   Users, 
@@ -22,8 +27,8 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState('organization');
 
   // Form State
-  const [institutionName, setInstitutionName] = useState('St. Xavier\'s Institute of Technology');
-  const [adminEmail, setAdminEmail] = useState('admin@stx-tech.edu');
+  const [institutionName, setInstitutionName] = useState('');
+  const [adminEmail, setAdminEmail] = useState('');
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
 
   const { updateLocalSettings } = useSystemStore();
@@ -32,23 +37,15 @@ export default function SettingsPage() {
     try {
       setLoading(true);
       if (isSuperAdmin) {
-        // Load Global Settings
-        const res = await api.get('/admin/settings');
-        if (res.data?.success) {
-          const s = res.data.data;
-          setInstitutionName(s.platformName || 'Vidya AI Education');
-          // For super admin, admin email might not exist, mock it or use email from user
-          setAdminEmail(user?.email || 'admin@vidya.ai');
-        }
+        const global = await getGlobalSettings();
+        setInstitutionName(global.platformName || '');
+        // Global settings have no contact email; show the signed-in admin's own address (read-only).
+        setAdminEmail(user?.email || '');
       } else {
-        // Load Org Settings
-        const res = await api.get('/admin/organization/settings');
-        if (res.data?.success) {
-          const s = res.data.data;
-          setInstitutionName(s.platformName || 'Vidya AI Education');
-          setLogoUrl(s.logoUrl || null);
-          setAdminEmail(user?.email || 'admin@stx-tech.edu');
-        }
+        const org = await getOrganizationSettings();
+        setInstitutionName(org.platformName || org.name || '');
+        setLogoUrl(org.logoUrl || null);
+        setAdminEmail(org.email || user?.email || '');
       }
     } catch {
       toast.error('Failed to load settings');
@@ -63,29 +60,22 @@ export default function SettingsPage() {
       setSaving(true);
       
       if (isSuperAdmin) {
-        const payload = {
-          platformName: institutionName,
-        };
-        const res = await api.put('/super-admin/settings', payload);
-        if (res.data?.success) {
-          toast.success('Global settings saved successfully!');
-          updateLocalSettings(payload);
-        }
+        const payload = { platformName: institutionName };
+        await updateGlobalSettings(payload);
+        toast.success('Global settings saved successfully!');
+        updateLocalSettings(payload);
       } else {
         const payload = {
           platformName: institutionName,
-          // Mock sending adminEmail to backend.
-          adminEmail,
-          logoUrl: logoUrl || undefined
+          email: adminEmail || undefined,
+          logoUrl: logoUrl || undefined,
         };
-        const res = await api.put('/admin/organization/settings', payload);
-        if (res.data?.success) {
-          toast.success('Organization profile saved successfully!');
-          updateLocalSettings(payload);
-        }
+        await updateOrganizationSettings(payload);
+        toast.success('Organization profile saved successfully!');
+        updateLocalSettings({ platformName: payload.platformName, logoUrl: payload.logoUrl });
       }
-    } catch (err) { 
-      toast.error('Failed to save settings'); 
+    } catch (err: any) { 
+      toast.error(err?.response?.data?.error || 'Failed to save settings'); 
     }
     finally { setSaving(false); }
   };
@@ -174,6 +164,7 @@ export default function SettingsPage() {
                     <input 
                       type="email" 
                       value={adminEmail} 
+                      readOnly={isSuperAdmin}
                       onChange={e => setAdminEmail(e.target.value)}
                       className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm font-medium focus:outline-none focus:border-gray-400 focus:ring-1 focus:ring-gray-400 transition-shadow text-gray-800" 
                     />

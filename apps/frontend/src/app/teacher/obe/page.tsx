@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { api } from '@/lib/api';
+import { PageHeader } from '@/design-system/PageHeader';
+import { Skeleton } from '@/design-system/LoadingState';
 import {
   BookOpen,
   FileText,
@@ -36,6 +38,7 @@ import {
   getCoAttainment,
   getAttainmentDashboard,
   generateBlueprintQuestions,
+  createCourse,
   createCourseOutcome,
   listPrograms,
   createProgramOutcome,
@@ -98,26 +101,6 @@ interface AttainmentResult {
   metThreshold: boolean;
   bloomLevel: BloomLevel;
 }
-
-// Local Storage Helper Functions for Real Persistence
-const getStorageData = <T,>(key: string, fallback: T): T => {
-  if (typeof window === 'undefined') return fallback;
-  try {
-    const item = localStorage.getItem(key);
-    return item ? JSON.parse(item) : fallback;
-  } catch {
-    return fallback;
-  }
-};
-
-const setStorageData = <T,>(key: string, value: T): void => {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch (e) {
-    console.error('LocalStorage write failed:', e);
-  }
-};
 
 let entityIdCounter = 0;
 function createEntityId(prefix: string): string {
@@ -362,11 +345,8 @@ interface UploadedFileItem {
         loadedCourses = [...loadedCourses, ...groupCourses];
       }
 
-      // Check saved custom courses
-      const savedCustomCourses = getStorageData<Course[]>('obe_custom_courses', []);
       const mergedMap = new Map<string, Course>();
       loadedCourses.forEach((c) => mergedMap.set(c.id, c));
-      savedCustomCourses.forEach((c) => mergedMap.set(c.id, c));
 
       const finalList = Array.from(mergedMap.values());
       setCourses(finalList);
@@ -375,9 +355,8 @@ interface UploadedFileItem {
         setSelectedCourseId((prev) => prev || finalList[0].id);
       }
     } catch {
-      const savedCustomCourses = getStorageData<Course[]>('obe_custom_courses', []);
-      setCourses(savedCustomCourses);
-      if (savedCustomCourses.length > 0) setSelectedCourseId(savedCustomCourses[0].id);
+      setCourses([]);
+      toast.error('Failed to load courses');
     } finally {
       setLoading(false);
     }
@@ -741,8 +720,6 @@ interface UploadedFileItem {
         if (unitsResult.status === 'fulfilled') {
           const mappedUnits = mapApiUnitsToLocal(unitsResult.value);
           setSyllabusUnits(mappedUnits);
-          // localStorage is cache-only — API is the source of truth for syllabus units.
-          setStorageData(`obe_units_${selectedCourseId}`, mappedUnits);
         } else {
           setSyllabusUnits([]);
         }
@@ -750,7 +727,6 @@ interface UploadedFileItem {
         if (matrixResult.status === 'fulfilled') {
           const matrix = mapCoPoMatrixResponse(matrixResult.value, courseObj);
           setMatrixData(matrix);
-          setStorageData(`obe_matrix_${selectedCourseId}`, matrix);
         } else {
           setMatrixData({
             course: { id: courseObj.id, name: courseObj.name, code: courseObj.code },
@@ -764,9 +740,6 @@ interface UploadedFileItem {
         if (blueprintsResult.status === 'fulfilled') {
           const serverBlueprints = blueprintsResult.value.map(apiBlueprintToComprehensive);
           setBlueprints(serverBlueprints);
-          if (serverBlueprints.length > 0) {
-            setStorageData(`obe_blueprints_${selectedCourseId}`, serverBlueprints);
-          }
         } else {
           setBlueprints([]);
         }
@@ -778,7 +751,6 @@ interface UploadedFileItem {
               : attainmentResult.value;
           const mappedAttainment = mapAttainmentResponse(attainmentResponse);
           setAttainment(mappedAttainment);
-          setStorageData(`obe_attainment_${selectedCourseId}`, mappedAttainment);
         } else {
           setAttainment([]);
         }
@@ -809,15 +781,11 @@ interface UploadedFileItem {
     if (matrixResult.status === 'fulfilled') {
       const matrix = mapCoPoMatrixResponse(matrixResult.value, courseObj);
       setMatrixData(matrix);
-      setStorageData(`obe_matrix_${selectedCourseId}`, matrix);
     }
 
     if (blueprintsResult.status === 'fulfilled') {
       const serverBlueprints = blueprintsResult.value.map(apiBlueprintToComprehensive);
       setBlueprints(serverBlueprints);
-      if (serverBlueprints.length > 0) {
-        setStorageData(`obe_blueprints_${selectedCourseId}`, serverBlueprints);
-      }
     }
 
     if (attainmentResult.status === 'fulfilled') {
@@ -825,7 +793,6 @@ interface UploadedFileItem {
         'course' in attainmentResult.value ? attainmentResult.value.course : attainmentResult.value;
       const mappedAttainment = mapAttainmentResponse(attainmentResponse);
       setAttainment(mappedAttainment);
-      setStorageData(`obe_attainment_${selectedCourseId}`, mappedAttainment);
     }
   }, [courses, selectedCourseId]);
 
@@ -851,8 +818,6 @@ interface UploadedFileItem {
       const saved = await replaceSyllabusUnits(selectedCourseId, payload);
       const mapped = mapApiUnitsToLocal(saved);
       setSyllabusUnits(mapped);
-      // localStorage is cache-only — not the source of truth for syllabus units.
-      setStorageData(`obe_units_${selectedCourseId}`, mapped);
       return mapped;
     } catch (err) {
       console.error(err);
@@ -863,7 +828,6 @@ interface UploadedFileItem {
 
   const saveBlueprintsList = (bps: ComprehensiveBlueprint[]) => {
     setBlueprints(bps);
-    setStorageData(`obe_blueprints_${selectedCourseId}`, bps);
   };
 
   // Add Dynamic Syllabus Unit
@@ -1548,22 +1512,20 @@ interface UploadedFileItem {
       return;
     }
 
-    const created: Course = {
-      id: createEntityId('course'),
-      name: newCourse.name.trim(),
-      code: newCourse.code.trim().toUpperCase(),
-      description: newCourse.description.trim()
-    };
-
+    let created: Course;
     try {
-      await api.post('/obe/courses', newCourse);
-    } catch {
-      /* Local fallback */
+      const apiCourse = await createCourse({
+        name: newCourse.name.trim(),
+        code: newCourse.code.trim().toUpperCase(),
+        description: newCourse.description.trim(),
+      });
+      created = { ...apiCourse, description: apiCourse.description ?? undefined, departmentId: apiCourse.departmentId ?? undefined } as Course;
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message || err?.response?.data?.error || 'Failed to create course');
+      return;
     }
 
-    const updatedCourses = [created, ...courses];
-    setCourses(updatedCourses);
-    setStorageData('obe_custom_courses', updatedCourses);
+    setCourses([created, ...courses]);
     setSelectedCourseId(created.id);
     setShowCreateCourseModal(false);
     setNewCourse({ name: '', code: '', description: '' });
@@ -1817,28 +1779,14 @@ interface UploadedFileItem {
 
   return (
     <div className="max-w-[1600px] mx-auto text-slate-900 font-sans flex flex-col gap-6 p-4 sm:p-6">
-      {/* Header Bar */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-neutral-200 pb-5">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="inline-flex items-center gap-1 rounded-full bg-orange-500/10 px-2.5 py-0.5 text-xs font-bold text-orange-600">
-              <Zap className="size-3.5" /> Outcome-Based Education Suite
-            </span>
-            <span className="text-xs text-neutral-400">• Dynamic Curriculum Planner</span>
-          </div>
-          <h1 className="text-2xl md:text-3xl font-extrabold text-neutral-900 tracking-tight mt-1">
-            Curriculum & OBE Dashboard
-          </h1>
-          <p className="text-xs md:text-sm text-neutral-500 font-medium mt-0.5">
-            Create real course syllabi, manage unit topics, configure CO-PO mapping matrices, and calculate outcome attainment.
-          </p>
-        </div>
-
-        {/* Header Action Controls */}
-        <div className="flex flex-wrap items-center gap-3 self-end lg:self-auto">
+      <PageHeader
+        title="Curriculum & OBE Dashboard"
+        subtitle="Create real course syllabi, manage unit topics, configure CO-PO mapping matrices, and calculate outcome attainment."
+        actions={
+          <div className="flex flex-wrap items-center gap-3">
           <button
             onClick={() => setShowCreateCourseModal(true)}
-            className="inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2 text-xs font-extrabold text-white shadow-sm hover:bg-orange-600 active:scale-[0.98] transition-all cursor-pointer"
+            className="inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2 text-xs font-extrabold text-white shadow-sm hover:bg-orange-600 ds-press ds-focus min-h-10 transition-colors cursor-pointer"
           >
             <FolderPlus className="size-4" />
             <span>Create Course</span>
@@ -1854,20 +1802,24 @@ interface UploadedFileItem {
               sizeVariant="md"
             />
           )}
-        </div>
-      </div>
+          </div>
+        }
+      />
 
       {/* Navigation Tabs */}
-      <div className="flex items-center gap-2 overflow-x-auto pb-1">
+      <div role="tablist" aria-label="OBE sections" className="flex items-center gap-2 overflow-x-auto pb-1">
         {tabs.map((t) => {
           const Icon = t.icon;
           const isActive = activeTab === t.id;
           return (
             <button
               key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={isActive}
               onClick={() => setActiveTab(t.id)}
               className={cn(
-                'px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer',
+                'ds-press ds-focus min-h-10 px-4 py-2.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-2 whitespace-nowrap cursor-pointer',
                 isActive
                   ? 'bg-neutral-900 text-white shadow-md'
                   : 'bg-white border border-neutral-200/90 text-neutral-600 hover:bg-neutral-50'
@@ -1925,7 +1877,14 @@ interface UploadedFileItem {
       )}
 
       {/* Main Content per Active Tab */}
-      {activeTab === 'units' ? (
+      {loading && selectedCourse ? (
+        <div role="status" aria-busy="true" aria-label="Loading course data" className="flex flex-col gap-4">
+          <Skeleton height={24} width="40%" radius={8} />
+          <Skeleton height={96} radius={16} />
+          <Skeleton height={96} radius={16} />
+          <Skeleton height={96} radius={16} />
+        </div>
+      ) : activeTab === 'units' ? (
         /* TAB 1: DYNAMIC SYLLABUS UNITS & LESSON TRACKER */
         <div className="flex flex-col gap-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -2083,7 +2042,6 @@ interface UploadedFileItem {
                 });
                 const mapped = mapCoPoMatrixResponse(updated, courseObj);
                 setMatrixData(mapped);
-                setStorageData(`obe_matrix_${selectedCourseId}`, mapped);
               }}
             />
           </div>

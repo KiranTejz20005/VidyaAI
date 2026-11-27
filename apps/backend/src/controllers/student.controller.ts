@@ -472,6 +472,87 @@ export const startAssessment = async (req: Request, res: Response): Promise<void
   }
 };
 
+const DRAFT_FILE_TYPE = 'DRAFT';
+const DRAFT_MAX_BYTES = 200 * 1024;
+const EDITABLE_STATUSES = ['AVAILABLE', 'STARTED', 'IN_PROGRESS'];
+
+/** Server-side answer draft for an online assessment; stored on the student's own (unsubmitted) attempt. */
+export const getAssessmentDraft = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const assignment = await loadAssignmentForRequest(req, req.params.id);
+    await assertStudentCanViewAssignment(req, assignment);
+
+    const submission = await prisma.studentSubmission.findUnique({
+      where: { assignmentId_studentId: { assignmentId: assignment.id, studentId: getUserId(req) } },
+    });
+
+    let answers: Record<string, string> = {};
+    if (submission && submission.fileType === DRAFT_FILE_TYPE && EDITABLE_STATUSES.includes(submission.status)) {
+      try {
+        const parsed = JSON.parse(submission.fileUrl);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) answers = parsed;
+      } catch {
+        // corrupt draft is treated as empty
+      }
+    }
+    res.json({ success: true, data: { answers, updatedAt: submission?.updatedAt ?? null } });
+  } catch (err) {
+    logger.error(`[Student:getAssessmentDraft] ${err}`);
+    res.status(500).json({ success: false, error: 'Failed to load draft' });
+  }
+};
+
+export const saveAssessmentDraft = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const assignment = await loadAssignmentForRequest(req, req.params.id);
+    await assertStudentCanViewAssignment(req, assignment);
+
+    const answers = req.body?.answers;
+    if (!answers || typeof answers !== 'object' || Array.isArray(answers)) {
+      res.status(400).json({ success: false, error: 'answers must be an object of question key to answer text' });
+      return;
+    }
+    const clean: Record<string, string> = {};
+    for (const [key, value] of Object.entries(answers)) {
+      if (typeof value === 'string') clean[key] = value;
+    }
+    const serialized = JSON.stringify(clean);
+    if (Buffer.byteLength(serialized, 'utf8') > DRAFT_MAX_BYTES) {
+      res.status(413).json({ success: false, error: 'Draft is too large' });
+      return;
+    }
+
+    const userId = getUserId(req);
+    const existing = await prisma.studentSubmission.findUnique({
+      where: { assignmentId_studentId: { assignmentId: assignment.id, studentId: userId } },
+    });
+    if (existing && !EDITABLE_STATUSES.includes(existing.status)) {
+      res.status(409).json({ success: false, error: 'This assessment has already been submitted' });
+      return;
+    }
+
+    const saved = existing
+      ? await prisma.studentSubmission.update({
+          where: { id: existing.id },
+          data: { fileUrl: serialized, fileType: DRAFT_FILE_TYPE, status: 'IN_PROGRESS' },
+        })
+      : await prisma.studentSubmission.create({
+          data: {
+            assignmentId: assignment.id,
+            studentId: userId,
+            organizationId: getOrgId(req),
+            fileUrl: serialized,
+            fileType: DRAFT_FILE_TYPE,
+            status: 'IN_PROGRESS',
+          },
+        });
+    res.json({ success: true, data: { updatedAt: saved.updatedAt } });
+  } catch (err) {
+    logger.error(`[Student:saveAssessmentDraft] ${err}`);
+    res.status(500).json({ success: false, error: 'Failed to save draft' });
+  }
+};
+
 export const submitAssessment = async (req: Request, res: Response): Promise<void> => {
   try {
     const assignment = await loadAssignmentForRequest(req, req.params.id);

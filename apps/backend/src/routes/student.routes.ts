@@ -20,6 +20,8 @@ router.get('/lessons/:id', asyncHandler(StudentController.getLessonDetail));
 router.get('/assessments', asyncHandler(StudentController.getMyAssessments));
 router.get('/assessments/upcoming', asyncHandler(StudentController.getUpcomingAssessments));
 router.post('/assessments/:id/start', asyncHandler(StudentController.startAssessment));
+router.get('/assessments/:id/draft', asyncHandler(StudentController.getAssessmentDraft));
+router.put('/assessments/:id/draft', requirePermission(PERMISSIONS.SUBMIT_ASSESSMENT), asyncHandler(StudentController.saveAssessmentDraft));
 router.post(
   '/assessments/:id/submit',
   requirePermission(PERMISSIONS.SUBMIT_ASSESSMENT),

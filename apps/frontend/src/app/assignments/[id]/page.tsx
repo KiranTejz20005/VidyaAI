@@ -29,6 +29,7 @@ import {
   fetchAssignmentHistory,
 } from '@/services/assignment.service';
 import { fetchPaper } from '@/services/paper.service';
+import { getAssessmentDraft, saveAssessmentDraft } from '@/services/student.service';
 import { useGenerationSocket } from '@/hooks/useSocket';
 import { useGenerationStore } from '@/store/generation.store';
 import { GenerationScreen } from '@/components/generation/GenerationScreen';
@@ -115,26 +116,48 @@ export default function AssignmentDetailPage({ params }: { params: Promise<{ id:
     }
   }, [id, isStudent, loadAssignmentData]);
 
-  // Try to load saved draft from local storage for students
+  // Load the server-side draft for students (debounced autosave below).
   useEffect(() => {
-    if (isStudent && id) {
-      const saved = localStorage.getItem(`vidya_draft_${id}`);
-      if (saved) {
-        try {
-          setStudentAnswers(JSON.parse(saved));
-        } catch {
-          // ignore parsing error
-        }
-      }
-    }
+    if (!isStudent || !id) return;
+    let cancelled = false;
+    getAssessmentDraft(id)
+      .then((draft) => {
+        if (cancelled) return;
+        if (draft.answers && Object.keys(draft.answers).length > 0) setStudentAnswers(draft.answers);
+      })
+      .catch(() => {
+        if (!cancelled) toast.error('Could not load your saved draft', { id: 'draft-load' });
+      })
+      ;
+    return () => {
+      cancelled = true;
+    };
   }, [isStudent, id]);
+
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const queueDraftSave = useCallback(
+    (answers: Record<string, string>) => {
+      if (!id) return;
+      if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+      draftTimerRef.current = setTimeout(() => {
+        saveAssessmentDraft(id, answers).catch(() => {
+          toast.error('Draft could not be saved. Check your connection.', { id: 'draft-save' });
+        });
+      }, 1200);
+    },
+    [id]
+  );
+  useEffect(
+    () => () => {
+      if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    },
+    []
+  );
 
   const updateAnswer = (qKey: string, val: string) => {
     const updated = { ...studentAnswers, [qKey]: val };
     setStudentAnswers(updated);
-    if (id) {
-      localStorage.setItem(`vidya_draft_${id}`, JSON.stringify(updated));
-    }
+    queueDraftSave(updated);
   };
 
   // Listen for generation completion events and refresh assignment immediately
@@ -227,9 +250,7 @@ export default function AssignmentDetailPage({ params }: { params: Promise<{ id:
       }
 
       toast.success('Assessment submitted successfully!');
-      if (id) {
-        localStorage.removeItem(`vidya_draft_${id}`);
-      }
+      if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
       setAssignment((prev) =>
         prev
           ? {
