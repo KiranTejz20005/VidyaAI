@@ -1,12 +1,12 @@
 import { Request, Response } from 'express';
 import prisma from '../../config/prisma';
 import { logger } from '../../utils/logger';
-import { UserService, resolveAssignableRole, resolveTargetOrganization } from '../../services/admin/user.service';
+import { UserService, resolveAssignableRole, resolveTargetOrganization, assertNotSelf } from '../../services/admin/user.service';
 import { actorFromRequest } from '../../services/admin/admin-scope';
 import { RoleService } from '../../services/admin/role.service';
 import { sendSuccess, sendCreated, sendError, sendNotFound } from '../common/response';
 import { parsePagination, buildPagination } from '../common/pagination';
-import { requireRequestOrgId } from '../../security/request-context';
+import { requireRequestOrgId, orgScope } from '../../security/request-context';
 import { createUserSchema, updateUserSchema, changeUserRoleSchema, idParamSchema } from './validators';
 import { serializeUser, serializeUserPermissions } from './serializers';
 
@@ -74,8 +74,9 @@ export const getUser = async (req: Request, res: Response): Promise<void> => {
       organization: { select: { name: true } }, department: { select: { name: true } },
     };
     
-    const user = await prisma.user.findUnique({
-      where: { id: params.id },
+    // Confined to the caller's organization; a SUPER_ADMIN without a selected organization is platform-wide.
+    const user = await prisma.user.findFirst({
+      where: { id: params.id, ...orgScope(req) },
       select: selectFields,
     });
     if (!user || user.status === 'DELETED') {
@@ -94,7 +95,8 @@ export const createUser = async (req: Request, res: Response): Promise<void> => 
     const { body } = createUserSchema.parse({ body: req.body });
     const orgId = requireRequestOrgId(req);
     const actor = actorFromRequest(req);
-    const role = resolveAssignableRole(actor, body.role, { allowOrgAdmin: true });
+    // Called from api/users/routes POST /users. Phase 3: org admins cannot mint ADMIN.
+    const role = resolveAssignableRole(actor, body.role);
     const organizationId = resolveTargetOrganization(actor, role, orgId);
     const { user, tempPassword } = await UserService.createUser({ ...body, role, organizationId });
     sendCreated(res, { ...serializeUser({ ...user, organization: null, department: null }), tempPassword }, 'User created successfully');
@@ -127,11 +129,10 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
 export const deactivateUser = async (req: Request, res: Response): Promise<void> => {
   try {
     const { params } = idParamSchema.parse({ params: req.params });
-    const existing = await prisma.user.findUnique({ where: { id: params.id } });
-    if (!existing) {
-      sendNotFound(res, 'User not found');
-      return;
-    }
+    const actor = actorFromRequest(req);
+    // 404 for other tenants, 403 for SUPER_ADMIN targets, never self
+    await UserService.findManageableUser(actor, params.id);
+    assertNotSelf(actor, params.id, 'deactivate');
     await UserService.suspendUser(params.id, true);
     sendSuccess(res, { data: null, message: 'User deactivated successfully' });
   } catch (error: any) {
@@ -159,7 +160,7 @@ export const changeUserRole = async (req: Request, res: Response): Promise<void>
 export const getUserPermissions = async (req: Request, res: Response): Promise<void> => {
   try {
     const { params } = idParamSchema.parse({ params: req.params });
-    const user = await prisma.user.findUnique({ where: { id: params.id } });
+    const user = await prisma.user.findFirst({ where: { id: params.id, ...orgScope(req) } });
     if (!user) {
       sendNotFound(res, 'User not found');
       return;

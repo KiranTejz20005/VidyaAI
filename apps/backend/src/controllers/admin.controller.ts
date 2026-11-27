@@ -3,7 +3,9 @@ import prisma from '../config/prisma';
 import { logger } from '../utils/logger';
 import { OrganizationService } from '../services/admin/organization.service';
 import { DepartmentService } from '../services/admin/department.service';
-import { UserService, resolveAssignableRole, resolveTargetOrganization } from '../services/admin/user.service';
+import { UserService, resolveAssignableRole, resolveTargetOrganization, assertNotSelf, assertDepartmentInOrganization, SAFE_USER_SELECT } from '../services/admin/user.service';
+import { NO_ORGANIZATION_ID } from '../middlewares/auth.middleware';
+import { toSafeUser } from '../security/credentials';
 import { actorFromRequest } from '../services/admin/admin-scope';
 import { RoleService } from '../services/admin/role.service';
 import { ClassroomService } from '../services/admin/classroom.service';
@@ -21,6 +23,16 @@ import * as path from 'path';
 import { getR2Storage } from '../services/storage/r2-storage';
 import { generateR2ObjectKey } from '../services/storage/key-generator';
 import { isRedisConnected } from '../config/redis';
+// Called by routes/admin.routes.ts POST /users/self/reset-password-force.
+// No other handler issues a post-reset accessToken for self-service force reset.
+// Writes User.passwordHash + forcePasswordReset; user asked to fix 403 password-reset lock.
+import {
+  hashPassword,
+  issueAccessTokenForUser,
+  revokeAllUserSessions,
+  getSessionIdForRefreshToken,
+} from '../services/auth.service';
+import { validatePasswordPolicy } from '../security/credentials';
 
 // ── In-Memory System Settings Store (Simulating Admin System Settings) ──
 let systemSettings = {
@@ -62,22 +74,46 @@ let failoverSettings = {
   autoFailover: true,
 };
 
+/** Treats the "no organization" sentinel as an absent organization. */
+function realOrgId(id: string | null | undefined): string | undefined {
+  return id && id !== NO_ORGANIZATION_ID ? id : undefined;
+}
+
 function getAdminOrgId(req: Request): string {
   if (req.user?.role === 'SUPER_ADMIN') {
-    const orgId = (req.query.organizationId as string) || (req.body.organizationId as string);
+    const orgId = (req.query.organizationId as string) || (req.body?.organizationId as string);
     if (orgId) return orgId;
   }
-  const orgId = req.user?.activeOrganizationId || req.user?.organizationId;
+  const orgId = realOrgId(req.user?.activeOrganizationId) || realOrgId(req.user?.organizationId);
   if (!orgId) throw new Error('Organization scope required');
   return orgId;
 }
 
 function getAdminOrgIdOptional(req: Request): string | undefined {
   if (req.user?.role === 'SUPER_ADMIN') {
-    const orgId = (req.query.organizationId as string) || (req.body.organizationId as string);
+    const orgId = (req.query.organizationId as string) || (req.body?.organizationId as string);
     if (orgId) return orgId;
   }
-  return req.user?.activeOrganizationId || req.user?.organizationId || undefined;
+  return realOrgId(req.user?.activeOrganizationId) || realOrgId(req.user?.organizationId);
+}
+
+/**
+ * Organization scope for read/aggregate endpoints. Only a SUPER_ADMIN may run
+ * without an organization (platform-wide); anyone else without one is refused
+ * with 403 so a missing scope can never widen a query to every tenant.
+ * Returns null after sending the 403.
+ */
+function resolveOrgScope(req: Request, res: Response): { orgId: string | undefined } | null {
+  const orgId = getAdminOrgIdOptional(req);
+  if (orgId) return { orgId };
+  if (req.user?.role === 'SUPER_ADMIN') return { orgId: undefined };
+  res.status(403).json({ success: false, error: 'No organization scope' });
+  return null;
+}
+
+/** Prisma fragment confining a query to a tenant (empty only for platform-wide SUPER_ADMIN). */
+function paperOrgWhere(orgId: string | undefined): { organizationId?: string } {
+  return orgId ? { organizationId: orgId } : {};
 }
 
 export class AdminController {
@@ -98,7 +134,7 @@ export class AdminController {
       res.json({ success: true, data: list });
     } catch (err: any) {
       logger.error(`[Admin:getOrganizations] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -114,7 +150,7 @@ export class AdminController {
       res.status(201).json({ success: true, data: org });
     } catch (err: any) {
       logger.error(`[Admin:createOrganization] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -128,7 +164,7 @@ export class AdminController {
       res.json({ success: true, data: org });
     } catch (err: any) {
       logger.error(`[Admin:updateOrganization] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -142,7 +178,7 @@ export class AdminController {
       res.json({ success: true, message: 'Organization deleted successfully' });
     } catch (err: any) {
       logger.error(`[Admin:deleteOrganization] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -172,7 +208,7 @@ export class AdminController {
       res.json({ success: true, data: org });
     } catch (err: any) {
       logger.error(`[Admin:suspendOrganization] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -186,7 +222,7 @@ export class AdminController {
       res.json({ success: true, data: stats });
     } catch (err: any) {
       logger.error(`[Admin:getOrganizationAnalytics] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -198,7 +234,7 @@ export class AdminController {
       res.json({ success: true, data: list });
     } catch (err: any) {
       logger.error(`[Admin:getDepartments] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -210,7 +246,7 @@ export class AdminController {
       res.status(201).json({ success: true, data: dept });
     } catch (err: any) {
       logger.error(`[Admin:createDepartment] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -228,7 +264,7 @@ export class AdminController {
       res.json({ success: true, data: dept });
     } catch (err: any) {
       logger.error(`[Admin:updateDepartment] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -254,7 +290,7 @@ export class AdminController {
       res.json({ success: true, data: dept });
     } catch (err: any) {
       logger.error(`[Admin:assignHOD] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -274,7 +310,7 @@ export class AdminController {
       res.json({ success: true, data: user });
     } catch (err: any) {
       logger.error(`[Admin:transferFaculty] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -292,7 +328,7 @@ export class AdminController {
       res.json({ success: true, data: dept });
     } catch (err: any) {
       logger.error(`[Admin:archiveDepartment] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -304,21 +340,32 @@ export class AdminController {
       res.json({ success: true, data: list });
     } catch (err: any) {
       logger.error(`[Admin:getUsers] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
   static async inviteUser(req: Request, res: Response) {
     try {
-      const { email, role } = req.body;
-      if (role === 'SUPER_ADMIN' && req.user?.role !== 'SUPER_ADMIN') {
+      const { email } = req.body;
+      if (typeof email !== 'string' || !email.trim()) {
+        res.status(400).json({ success: false, error: 'Email is required' });
+        return;
+      }
+      if (typeof req.body.role === 'string' && ['SUPER_ADMIN'].includes(req.body.role.trim().toUpperCase()) && req.user?.role !== 'SUPER_ADMIN') {
         res.status(403).json({ success: false, error: 'Cannot invite a SUPER_ADMIN' });
         return;
       }
       const organizationId = getAdminOrgId(req);
+      // Normalizes aliases and refuses roles the caller may not grant; an invitation is always bound to the caller's organization.
+      const role = resolveAssignableRole(actorFromRequest(req), req.body.role);
+      if (role === 'SUPER_ADMIN') {
+        // SUPER_ADMIN accounts are organization-less and cannot be minted through an org invitation.
+        res.status(400).json({ success: false, error: 'Cannot invite a SUPER_ADMIN to an organization' });
+        return;
+      }
 
       const invitation = await createInvitation({
-        email,
+        email: email.trim().toLowerCase(),
         role,
         organizationId,
         createdById: req.user!.id
@@ -326,7 +373,7 @@ export class AdminController {
       res.status(201).json({ success: true, data: invitation });
     } catch (err: any) {
       logger.error(`[Admin:inviteUser] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -335,7 +382,7 @@ export class AdminController {
       if (!req.file) throw new Error('No CSV file uploaded');
       const organizationId = getAdminOrgId(req);
 
-      const result = await processCsvImport(req.file.path, organizationId, req.user!.id);
+      const result = await processCsvImport(req.file.path, organizationId, req.user!.id, { isSuperAdmin: req.user?.role === 'SUPER_ADMIN' });
 
       await prisma.auditLog.create({
         data: {
@@ -351,18 +398,19 @@ export class AdminController {
       res.status(201).json({ success: true, data: result });
     } catch (err: any) {
       logger.error(`[Admin:importUsersCsv] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
+  /** Blocks non–SUPER_ADMIN callers from managing SUPER_ADMIN or peer ADMIN accounts. */
   static async checkSuperAdminProtection(targetUserId: string, currentUserRole: string): Promise<boolean> {
     if (currentUserRole === 'SUPER_ADMIN') return true;
     const targetUser = await prisma.user.findUnique({
       where: { id: targetUserId },
       select: { role: true }
     });
-    if (targetUser?.role === 'SUPER_ADMIN') {
-      return false; // Access denied
+    if (targetUser?.role === 'SUPER_ADMIN' || targetUser?.role === 'ADMIN') {
+      return false;
     }
     return true;
   }
@@ -406,7 +454,7 @@ export class AdminController {
       res.status(201).json({ success: true, data: user });
     } catch (err: any) {
       logger.error(`[Admin:createUser] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -434,7 +482,7 @@ export class AdminController {
       res.json({ success: true, data: user });
     } catch (err: any) {
       logger.error(`[Admin:updateUser] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -454,11 +502,12 @@ export class AdminController {
         return;
       }
       const { suspend } = req.body;
+      if (suspend !== false) assertNotSelf(actorFromRequest(req), req.params.id, 'suspend');
       const user = await UserService.suspendUser(req.params.id, suspend);
       res.json({ success: true, data: user });
     } catch (err: any) {
       logger.error(`[Admin:suspendUser] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -477,11 +526,12 @@ export class AdminController {
         res.status(403).json({ success: false, error: 'Access denied: User belongs to another organization.' });
         return;
       }
+      assertNotSelf(actorFromRequest(req), req.params.id, 'delete');
       await UserService.deleteUser(req.params.id);
       res.json({ success: true, message: 'User soft-deleted successfully' });
     } catch (err: any) {
       logger.error(`[Admin:deleteUser] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -505,7 +555,7 @@ export class AdminController {
       res.json({ success: true, data: user });
     } catch (err: any) {
       logger.error(`[Admin:resetPassword] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -519,7 +569,7 @@ export class AdminController {
       res.json({ success: true, data });
     } catch (err: any) {
       logger.error(`[Admin:impersonateUser] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -530,7 +580,7 @@ export class AdminController {
       res.json({ success: true, data: list });
     } catch (err: any) {
       logger.error(`[Admin:getRoles] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -540,7 +590,7 @@ export class AdminController {
       res.status(201).json({ success: true, data: role });
     } catch (err: any) {
       logger.error(`[Admin:createRole] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -550,7 +600,7 @@ export class AdminController {
       res.json({ success: true, data: role });
     } catch (err: any) {
       logger.error(`[Admin:updateRole] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -560,7 +610,7 @@ export class AdminController {
       res.json({ success: true, message: 'Role deleted' });
     } catch (err: any) {
       logger.error(`[Admin:deleteRole] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -570,7 +620,7 @@ export class AdminController {
       res.json({ success: true, data: list });
     } catch (err: any) {
       logger.error(`[Admin:getPermissions] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -596,7 +646,7 @@ export class AdminController {
       res.json({ success: true, data: role });
     } catch (err: any) {
       logger.error(`[Admin:assignPermissions] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -608,7 +658,7 @@ export class AdminController {
       res.json({ success: true, data: list });
     } catch (err: any) {
       logger.error(`[Admin:getClassrooms] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -633,7 +683,7 @@ export class AdminController {
       res.status(201).json({ success: true, data: classroom });
     } catch (err: any) {
       logger.error(`[Admin:createClassroom] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -660,7 +710,7 @@ export class AdminController {
       res.json({ success: true, data: classroom });
     } catch (err: any) {
       logger.error(`[Admin:updateClassroom] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -687,7 +737,7 @@ export class AdminController {
       res.json({ success: true, message: 'Class deleted' });
     } catch (err: any) {
       logger.error(`[Admin:deleteClassroom] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -700,7 +750,7 @@ export class AdminController {
       res.json({ success: true, data: list });
     } catch (err: any) {
       logger.error(`[Admin:getGroups] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -712,7 +762,7 @@ export class AdminController {
       res.status(201).json({ success: true, data: grp });
     } catch (err: any) {
       logger.error(`[Admin:createGroup] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -728,7 +778,7 @@ export class AdminController {
       res.json({ success: true, data: grp });
     } catch (err: any) {
       logger.error(`[Admin:updateGroup] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -744,7 +794,7 @@ export class AdminController {
       res.json({ success: true, message: 'Group deleted successfully' });
     } catch (err: any) {
       logger.error(`[Admin:deleteGroup] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -761,7 +811,7 @@ export class AdminController {
       res.json({ success: true, data: grp });
     } catch (err: any) {
       logger.error(`[Admin:assignGroupFaculty] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -778,7 +828,7 @@ export class AdminController {
       res.json({ success: true, message: 'Group students updated successfully' });
     } catch (err: any) {
       logger.error(`[Admin:assignGroupStudents] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -795,7 +845,7 @@ export class AdminController {
       res.json({ success: true, message: `${students.length} students imported successfully` });
     } catch (err: any) {
       logger.error(`[Admin:importGroupStudents] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -811,14 +861,17 @@ export class AdminController {
       res.json({ success: true, message: `Paper ${paperId} successfully assigned to group ${req.params.id}` });
     } catch (err: any) {
       logger.error(`[Admin:assignGroupPapers] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
   // ── 7. Paper Management ──
-  static async getPapers(_req: Request, res: Response) {
+  static async getPapers(req: Request, res: Response) {
     try {
+      const scope = resolveOrgScope(req, res);
+      if (!scope) return;
       const papers = await prisma.generatedPaper.findMany({
+        where: paperOrgWhere(scope.orgId),
         orderBy: { createdAt: 'desc' },
         include: {
           assignment: {
@@ -832,12 +885,19 @@ export class AdminController {
       res.json({ success: true, data: papers });
     } catch (err: any) {
       logger.error(`[Admin:getPapers] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
   static async archivePaper(req: Request, res: Response) {
     try {
+      const scope = resolveOrgScope(req, res);
+      if (!scope) return;
+      const existing = await prisma.generatedPaper.findFirst({ where: { id: req.params.id, ...paperOrgWhere(scope.orgId) }, select: { id: true } });
+      if (!existing) {
+        res.status(404).json({ success: false, error: 'Paper not found' });
+        return;
+      }
       const paper = await prisma.generatedPaper.update({
         where: { id: req.params.id },
         data: {
@@ -850,17 +910,24 @@ export class AdminController {
       res.json({ success: true, data: paper });
     } catch (err: any) {
       logger.error(`[Admin:archivePaper] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
   static async deletePaper(req: Request, res: Response) {
     try {
+      const scope = resolveOrgScope(req, res);
+      if (!scope) return;
+      const existing = await prisma.generatedPaper.findFirst({ where: { id: req.params.id, ...paperOrgWhere(scope.orgId) }, select: { id: true } });
+      if (!existing) {
+        res.status(404).json({ success: false, error: 'Paper not found' });
+        return;
+      }
       await prisma.generatedPaper.delete({ where: { id: req.params.id } });
       res.json({ success: true, message: 'Paper deleted successfully' });
     } catch (err: any) {
       logger.error(`[Admin:deletePaper] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -868,7 +935,9 @@ export class AdminController {
     try {
       // In VidyaAI, paper generation is queued via BullMQ.
       // We simulate triggering regeneration by finding the associated assignment and running a queue retry or creating a new job.
-      const paper = await prisma.generatedPaper.findUnique({ where: { id: req.params.id } });
+      const scope = resolveOrgScope(req, res);
+      if (!scope) return;
+      const paper = await prisma.generatedPaper.findFirst({ where: { id: req.params.id, ...paperOrgWhere(scope.orgId) } });
       if (!paper) {
         res.status(404).json({ success: false, error: 'Paper not found' });
         return;
@@ -876,23 +945,32 @@ export class AdminController {
       res.json({ success: true, message: 'Regeneration job queued successfully for assignment ' + paper.assignmentId });
     } catch (err: any) {
       logger.error(`[Admin:regeneratePaper] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
   static async reassignPaper(req: Request, res: Response) {
     try {
+      const scope = resolveOrgScope(req, res);
+      if (!scope) return;
+      const existing = await prisma.generatedPaper.findFirst({ where: { id: req.params.id, ...paperOrgWhere(scope.orgId) }, select: { id: true } });
+      if (!existing) {
+        res.status(404).json({ success: false, error: 'Paper not found' });
+        return;
+      }
       const { targetGroupId } = req.body;
       res.json({ success: true, message: `Paper reassigned to group ${targetGroupId}` });
     } catch (err: any) {
       logger.error(`[Admin:reassignPaper] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
-  static async getPaperAnalytics(_req: Request, res: Response) {
+  static async getPaperAnalytics(req: Request, res: Response) {
     try {
-      const paperCount = await prisma.generatedPaper.count();
+      const scope = resolveOrgScope(req, res);
+      if (!scope) return;
+      const paperCount = await prisma.generatedPaper.count({ where: paperOrgWhere(scope.orgId) });
       res.json({
         success: true,
         data: {
@@ -903,7 +981,7 @@ export class AdminController {
       });
     } catch (err: any) {
       logger.error(`[Admin:getPaperAnalytics] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -918,7 +996,7 @@ export class AdminController {
       res.json({ success: true, data: assignments });
     } catch (err: any) {
       logger.error(`[Admin:getAssignments] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -943,7 +1021,7 @@ export class AdminController {
       res.json({ success: true, data: updated });
     } catch (err: any) {
       logger.error(`[Admin:reassignAssignment] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -967,7 +1045,7 @@ export class AdminController {
       res.json({ success: true, data: updated });
     } catch (err: any) {
       logger.error(`[Admin:closeAssignment] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -992,7 +1070,7 @@ export class AdminController {
       res.json({ success: true, data: updated });
     } catch (err: any) {
       logger.error(`[Admin:reopenAssignment] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -1015,37 +1093,32 @@ export class AdminController {
       res.status(200).send(csvData);
     } catch (err: any) {
       logger.error(`[Admin:exportAssignmentResults] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
   // ── 10. Analytics Dashboard ──
   static async getAnalytics(req: Request, res: Response) {
     try {
-      let orgId = getAdminOrgIdOptional(req);
-      if (!orgId && req.user?.id) {
-        const dbUser = await prisma.user.findUnique({
-          where: { id: req.user.id },
-          select: { organizationId: true, activeOrganizationId: true },
-        });
-        orgId = dbUser?.activeOrganizationId || dbUser?.organizationId || undefined;
-      }
-      const data = await AnalyticsService.getAdminAnalytics(orgId);
+      const scope = resolveOrgScope(req, res);
+      if (!scope) return;
+      const data = await AnalyticsService.getAdminAnalytics(scope.orgId);
       res.json({ success: true, data });
     } catch (err: any) {
       logger.error(`[Admin:getAnalytics] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
   // ── 11. Audit Logs ──
   static async getAuditLogs(req: Request, res: Response) {
     try {
-      const orgId = getAdminOrgIdOptional(req);
+      const scope = resolveOrgScope(req, res);
+      if (!scope) return;
       const { action, search, dateFrom, dateTo } = req.query;
       
       const where: any = {};
-      if (orgId) where.organizationId = orgId;
+      if (scope.orgId) where.organizationId = scope.orgId;
       if (action) where.action = String(action);
       // Trigger restart 2
       
@@ -1088,7 +1161,7 @@ export class AdminController {
       res.json({ success: true, data: logs });
     } catch (err: any) {
       logger.error(`[Admin:getAuditLogs] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -1109,7 +1182,7 @@ export class AdminController {
       res.json({ success: true, data: subs });
     } catch (err: any) {
       logger.error(`[Admin:getBillingSubscriptions] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -1124,7 +1197,7 @@ export class AdminController {
       res.json({ success: true, data: sub });
     } catch (err: any) {
       logger.error(`[Admin:getSubscription] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -1139,7 +1212,7 @@ export class AdminController {
       res.json({ success: true, data: sub });
     } catch (err: any) {
       logger.error(`[Admin:updateSubscription] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -1155,7 +1228,7 @@ export class AdminController {
       res.json({ success: true, data: invoices });
     } catch (err: any) {
       logger.error(`[Admin:getSubscriptionInvoices] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -1171,7 +1244,7 @@ export class AdminController {
       res.status(201).json({ success: true, data: invoice });
     } catch (err: any) {
       logger.error(`[Admin:createSubscriptionInvoice] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -1186,7 +1259,7 @@ export class AdminController {
       res.json({ success: true, data: usage });
     } catch (err: any) {
       logger.error(`[Admin:getBillingUsage] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -1215,7 +1288,7 @@ export class AdminController {
       res.json({ success: true, data, failoverSettings });
     } catch (err: any) {
       logger.error(`[Admin:getAiProviders] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -1230,7 +1303,7 @@ export class AdminController {
       });
     } catch (err: any) {
       logger.error(`[Admin:testProviderHealth] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -1240,7 +1313,7 @@ export class AdminController {
       res.json({ success: true, data: failoverSettings });
     } catch (err: any) {
       logger.error(`[Admin:updateFailoverSettings] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -1276,7 +1349,7 @@ export class AdminController {
       });
     } catch (err: any) {
       logger.error(`[Admin:getQueueHealth] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -1306,7 +1379,7 @@ export class AdminController {
       res.json({ success: true, data: list });
     } catch (err: any) {
       logger.error(`[Admin:getFailedJobs] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -1325,7 +1398,7 @@ export class AdminController {
       res.json({ success: true, message: `Job ${jobId} successfully resubmitted to ${queueName} queue` });
     } catch (err: any) {
       logger.error(`[Admin:retryQueueJob] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -1335,7 +1408,7 @@ export class AdminController {
       res.json({ success: true, data: systemSettings });
     } catch (err: any) {
       logger.error(`[Admin:getSystemSettings] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -1345,26 +1418,48 @@ export class AdminController {
       res.json({ success: true, data: systemSettings });
     } catch (err: any) {
       logger.error(`[Admin:updateSystemSettings] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
   static async forceResetOwnPassword(req: Request, res: Response) {
     try {
       const { newPassword } = req.body;
-      if (!newPassword || newPassword.length < 8) {
-        res.status(400).json({ success: false, error: 'Password must be at least 8 characters long.' });
+      const policyError = validatePasswordPolicy(newPassword);
+      if (policyError) {
+        res.status(400).json({ success: false, error: policyError });
         return;
       }
-      
-      const pwdHash = await argon2.hash(newPassword);
+
+      const current = await prisma.user.findUnique({
+        where: { id: req.user!.id },
+        select: { id: true, forcePasswordReset: true, passwordHash: true },
+      });
+      if (!current) {
+        res.status(404).json({ success: false, error: 'User not found' });
+        return;
+      }
+      // Only usable while the account is under forced reset — not a general
+      // password-change bypass. Prefer PUT /auth/me/password for all roles.
+      if (!current.forcePasswordReset) {
+        res.status(403).json({
+          success: false,
+          error: 'Forced password reset is not required for this account.',
+          code: 'FORCE_RESET_NOT_REQUIRED',
+        });
+        return;
+      }
+
       const updated = await prisma.user.update({
         where: { id: req.user!.id },
         data: {
-          passwordHash: pwdHash,
+          passwordHash: await hashPassword(newPassword),
           forcePasswordReset: false,
         },
       });
+
+      const currentSessionId = await getSessionIdForRefreshToken(req.cookies?.refresh_token);
+      await revokeAllUserSessions(req.user!.id, currentSessionId);
 
       await AuditService.logAction({
         userId: req.user!.id,
@@ -1374,10 +1469,15 @@ export class AdminController {
         metadata: { userId: req.user!.id },
       });
 
-      res.json({ success: true, message: 'Password reset successfully', data: updated });
+      // Return a fresh access token without the forced-reset claim.
+      res.json({
+        success: true,
+        message: 'Password reset successfully',
+        data: { accessToken: issueAccessTokenForUser(updated), forcePasswordReset: false },
+      });
     } catch (err: any) {
       logger.error(`[Admin:forceResetOwnPassword] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -1393,7 +1493,7 @@ export class AdminController {
       res.json({ success: true, data: faculty });
     } catch (err: any) {
       logger.error(`[Admin:getFaculty] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -1412,6 +1512,7 @@ export class AdminController {
         return;
       }
 
+      if (departmentId) await assertDepartmentInOrganization(departmentId, orgId);
       const pwd = password || 'Faculty@123';
       const pwdHash = await argon2.hash(pwd);
       const user = await prisma.user.create({
@@ -1436,54 +1537,56 @@ export class AdminController {
           metadata: { email: user.email },
         },
       });
-      res.status(201).json({ success: true, data: user });
+      res.status(201).json({ success: true, data: toSafeUser(user) });
     } catch (err: any) {
       logger.error(`[Admin:createFaculty] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
   static async updateFaculty(req: Request, res: Response) {
     try {
-      if (req.user) await AdminController.checkSuperAdminProtection(req.params.id, req.user.role);
-      const orgId = getAdminOrgId(req);
-      const targetUser = await prisma.user.findUnique({ where: { id: req.params.id } });
-      if (targetUser && targetUser.organizationId !== orgId && req.user?.role !== 'SUPER_ADMIN') {
-        res.status(403).json({ success: false, error: 'Access denied: User belongs to another organization.' });
-        return;
-      }
+      const target = await UserService.findManageableUser(actorFromRequest(req), req.params.id, { roles: ['TEACHER'] });
       const { firstName, lastName, email, departmentId } = req.body;
       const data: any = {};
       if (firstName) data.firstName = firstName;
       if (lastName) data.lastName = lastName;
-      if (email) data.email = email;
-      if (departmentId) data.departmentId = departmentId;
-      const user = await prisma.user.update({ where: { id: req.params.id }, data });
+      if (email) {
+        const normalized = String(email).trim().toLowerCase();
+        if (normalized !== target.email) {
+          const taken = await prisma.user.findUnique({ where: { email: normalized }, select: { id: true } });
+          if (taken) {
+            res.status(409).json({ success: false, error: 'User with this email already exists.' });
+            return;
+          }
+          data.email = normalized;
+        }
+      }
+      if (departmentId) {
+        await assertDepartmentInOrganization(departmentId, target.organizationId);
+        data.departmentId = departmentId;
+      }
+      const user = await prisma.user.update({ where: { id: req.params.id }, data, select: SAFE_USER_SELECT });
       res.json({ success: true, data: user });
     } catch (err: any) {
       logger.error(`[Admin:updateFaculty] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
   static async deactivateFaculty(req: Request, res: Response) {
     try {
-      if (req.user) await AdminController.checkSuperAdminProtection(req.params.id, req.user.role);
-      const orgId = getAdminOrgId(req);
-      const targetUser = await prisma.user.findUnique({ where: { id: req.params.id } });
-      if (targetUser && targetUser.organizationId !== orgId && req.user?.role !== 'SUPER_ADMIN') {
-        res.status(403).json({ success: false, error: 'Access denied: User belongs to another organization.' });
-        return;
-      }
+      await UserService.findManageableUser(actorFromRequest(req), req.params.id, { roles: ['TEACHER'] });
       const { status } = req.body;
       if (!['ACTIVE', 'SUSPENDED'].includes(status)) {
         res.status(400).json({ success: false, error: 'Status must be ACTIVE or SUSPENDED' }); return;
       }
-      const user = await prisma.user.update({ where: { id: req.params.id }, data: { status } });
+      // suspendUser revokes every session so the suspension takes effect immediately
+      const user = await UserService.suspendUser(req.params.id, status === 'SUSPENDED');
       res.json({ success: true, data: user });
     } catch (err: any) {
       logger.error(`[Admin:deactivateFaculty] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -1502,19 +1605,19 @@ export class AdminController {
       res.status(201).json({ success: true, data: invitation });
     } catch (err: any) {
       logger.error(`[Admin:inviteFaculty] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
   static async resetFacultyPassword(req: Request, res: Response) {
     try {
-      if (req.user) await AdminController.checkSuperAdminProtection(req.params.id, req.user.role);
+      await UserService.findManageableUser(actorFromRequest(req), req.params.id, { roles: ['TEACHER'] });
       const { newPassword } = req.body;
       const user = await UserService.resetPassword(req.params.id, newPassword);
       res.json({ success: true, data: user });
     } catch (err: any) {
       logger.error(`[Admin:resetFacultyPassword] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -1556,7 +1659,7 @@ export class AdminController {
       res.status(201).json({ success: true, data: { created: created.length, errors } });
     } catch (err: any) {
       logger.error(`[Admin:importFacultyCsv] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -1588,7 +1691,7 @@ export class AdminController {
       res.json({ success: true, data: mappedStudents });
     } catch (err: any) {
       logger.error(`[Admin:getStudents] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -1607,6 +1710,13 @@ export class AdminController {
         return;
       }
 
+      if (req.body.classId) {
+        const cls = await prisma.class.findFirst({ where: { id: req.body.classId, organizationId: orgId }, select: { id: true } });
+        if (!cls) {
+          res.status(400).json({ success: false, error: 'Invalid class' });
+          return;
+        }
+      }
       const pwdHash = await argon2.hash('Student@123');
       const preferences = { rollNo: req.body.rollNo, classId: req.body.classId, section: req.body.section };
       const user = await prisma.user.create({
@@ -1646,27 +1756,40 @@ export class AdminController {
         userAgent: req.headers['user-agent']
       });
 
-      res.status(201).json({ success: true, data: user });
+      res.status(201).json({ success: true, data: toSafeUser(user) });
     } catch (err: any) {
       logger.error(`[Admin:createStudent] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
   static async updateStudent(req: Request, res: Response) {
     try {
-      const orgId = getAdminOrgId(req);
-      const existingUser = await prisma.user.findUnique({ where: { id: req.params.id } });
-      if (existingUser && existingUser.organizationId !== orgId && req.user?.role !== 'SUPER_ADMIN') {
-        res.status(403).json({ success: false, error: 'Access denied: User belongs to another organization.' });
-        return;
+      const existingUser = await UserService.findManageableUser(actorFromRequest(req), req.params.id, { roles: ['STUDENT'] });
+      const studentOrgId = existingUser.organizationId;
+      if (typeof req.body.classId === 'string' && req.body.classId) {
+        const cls = await prisma.class.findFirst({ where: { id: req.body.classId, organizationId: studentOrgId ?? '' }, select: { id: true } });
+        if (!cls) {
+          res.status(400).json({ success: false, error: 'Invalid class' });
+          return;
+        }
       }
       
       const { firstName, lastName, email, phone } = req.body;
       const data: any = {};
       if (firstName) data.firstName = firstName;
       if (lastName) data.lastName = lastName;
-      if (email) data.email = email;
+      if (email) {
+        const normalized = String(email).trim().toLowerCase();
+        if (normalized !== existingUser.email) {
+          const taken = await prisma.user.findUnique({ where: { email: normalized }, select: { id: true } });
+          if (taken) {
+            res.status(409).json({ success: false, error: 'User with this email already exists.' });
+            return;
+          }
+          data.email = normalized;
+        }
+      }
       if (phone !== undefined) data.phone = phone || null;
       
       const preferences = { 
@@ -1677,13 +1800,13 @@ export class AdminController {
       };
       data.preferences = preferences;
 
-      const user = await prisma.user.update({ where: { id: req.params.id }, data });
+      const user = await prisma.user.update({ where: { id: req.params.id }, data, select: SAFE_USER_SELECT });
 
       // Sync to ClassStudent
       if (existingUser?.email && req.body.classId !== undefined) {
-        // Find existing ClassStudent by email
+        // Find existing ClassStudent by email, only within the student's own organization
         const existingClassStudent = await prisma.classStudent.findFirst({
-          where: { email: existingUser.email }
+          where: { email: existingUser.email, class: { organizationId: studentOrgId ?? '' } }
         });
         
         if (existingClassStudent) {
@@ -1717,7 +1840,7 @@ export class AdminController {
       await AuditService.logAuditEvent({
         action: 'STUDENT_UPDATED',
         userId: req.user?.id,
-        organizationId: getAdminOrgIdOptional(req),
+        organizationId: studentOrgId ?? undefined,
         entity: 'User',
         entityId: user.id,
         ipAddress: req.ip,
@@ -1727,27 +1850,23 @@ export class AdminController {
       res.status(200).json({ success: true, data: user });
     } catch (err: any) {
       logger.error(`[Admin:updateStudent] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
   static async deactivateStudent(req: Request, res: Response) {
     try {
-      const orgId = getAdminOrgId(req);
-      const targetUser = await prisma.user.findUnique({ where: { id: req.params.id } });
-      if (targetUser && targetUser.organizationId !== orgId && req.user?.role !== 'SUPER_ADMIN') {
-        res.status(403).json({ success: false, error: 'Access denied: User belongs to another organization.' });
-        return;
-      }
+      await UserService.findManageableUser(actorFromRequest(req), req.params.id, { roles: ['STUDENT'] });
       const { status } = req.body;
       if (!['ACTIVE', 'SUSPENDED'].includes(status)) {
         res.status(400).json({ success: false, error: 'Status must be ACTIVE or SUSPENDED' }); return;
       }
-      const user = await prisma.user.update({ where: { id: req.params.id }, data: { status } });
+      // suspendUser revokes every session so the suspension takes effect immediately
+      const user = await UserService.suspendUser(req.params.id, status === 'SUSPENDED');
       res.json({ success: true, data: user });
     } catch (err: any) {
       logger.error(`[Admin:deactivateStudent] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -1790,25 +1909,14 @@ export class AdminController {
       res.status(201).json({ success: true, data: { created: created.length, errors } });
     } catch (err: any) {
       logger.error(`[Admin:importStudentsCsv] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
   // ── 18. Approvals Management ──
   static async getPendingApprovals(req: Request, res: Response) {
     try {
-      let orgId = req.user?.activeOrganizationId || req.user?.organizationId;
-      if (!orgId && req.user?.id) {
-        const dbUser = await prisma.user.findUnique({
-          where: { id: req.user.id },
-          select: { organizationId: true, activeOrganizationId: true },
-        });
-        orgId = dbUser?.activeOrganizationId || dbUser?.organizationId || undefined;
-      }
-      if (!orgId) {
-        const firstOrg = await prisma.organization.findFirst();
-        orgId = firstOrg?.id;
-      }
+      const orgId = getAdminOrgIdOptional(req);
       logger.debug({ userId: req.user?.id, role: req.user?.role, orgId }, '[Admin:getPendingApprovals] fetching');
       if (!orgId) { res.status(403).json({ success: false, error: 'No organization scope' }); return; }
       const pending = await prisma.assignment.findMany({
@@ -1836,7 +1944,7 @@ export class AdminController {
       res.json({ success: true, data: pending });
     } catch (err: any) {
       logger.error(`[Admin:getPendingApprovals] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -1869,7 +1977,7 @@ export class AdminController {
       res.json({ success: true, data: updated });
     } catch (err: any) {
       logger.error(`[Admin:approveAssessment] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -1903,7 +2011,7 @@ export class AdminController {
       res.json({ success: true, data: updated });
     } catch (err: any) {
       logger.error(`[Admin:rejectAssessment] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -1917,7 +2025,7 @@ export class AdminController {
       res.json({ success: true, data: updated });
     } catch (err: any) {
       logger.error(`[Admin:requestChanges] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -1930,25 +2038,16 @@ export class AdminController {
       res.json({ success: true, data: updated });
     } catch (err: any) {
       logger.error(`[Admin:publishAssessment] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
   // ── 19. Organization Analytics Dashboard ──
   static async getOrgAnalyticsDashboard(req: Request, res: Response) {
     try {
-      let orgId = req.user?.activeOrganizationId || req.user?.organizationId;
-      if (!orgId && req.user?.id) {
-        const dbUser = await prisma.user.findUnique({
-          where: { id: req.user.id },
-          select: { organizationId: true, activeOrganizationId: true },
-        });
-        orgId = dbUser?.activeOrganizationId || dbUser?.organizationId || undefined;
-      }
-      if (!orgId) {
-        const firstOrg = await prisma.organization.findFirst();
-        orgId = firstOrg?.id;
-      }
+      const scope = resolveOrgScope(req, res);
+      if (!scope) return;
+      const orgId = scope.orgId;
 
       const [
         totalFaculty,
@@ -2099,19 +2198,19 @@ export class AdminController {
       });
     } catch (err: any) {
       logger.error(`[Admin:getOrgAnalyticsDashboard] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
   // ── 20. Organization Settings ──
   static async getOrganizationSettings(req: Request, res: Response) {
     try {
-      const orgId = req.user?.activeOrganizationId || req.user?.organizationId;
-      let org = orgId ? await prisma.organization.findUnique({ where: { id: orgId } }) : null;
-
-      if (!org) {
-        org = await prisma.organization.findFirst();
-      }
+      const scope = resolveOrgScope(req, res);
+      if (!scope) return;
+      // Only a platform-wide SUPER_ADMIN (no organization) falls back to the first organization.
+      const org = scope.orgId
+        ? await prisma.organization.findUnique({ where: { id: scope.orgId } })
+        : await prisma.organization.findFirst();
 
       if (!org) {
         res.json({
@@ -2139,13 +2238,13 @@ export class AdminController {
       });
     } catch (err: any) {
       logger.error(`[Admin:getOrganizationSettings] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
   static async updateOrganizationSettings(req: Request, res: Response) {
     try {
-      const orgId = req.user?.activeOrganizationId || req.user?.organizationId;
+      const orgId = getAdminOrgIdOptional(req);
       if (!orgId) { res.status(403).json({ success: false, error: 'No organization scope' }); return; }
       const { name, email, phone, address, logo, platformName, brandColor, logoUrl } = req.body;
       const data: any = {};
@@ -2171,15 +2270,17 @@ export class AdminController {
       });
     } catch (err: any) {
       logger.error(`[Admin:updateOrganizationSettings] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
   // ── Dashboard Stats ──
   static async getDashboardStats(req: Request, res: Response) {
     try {
-      const orgId = getAdminOrgIdOptional(req);
-      
-      // If no orgId, return aggregated stats for SUPER_ADMIN
+      const scope = resolveOrgScope(req, res);
+      if (!scope) return;
+      const orgId = scope.orgId;
+
+      // No orgId is only reachable by a SUPER_ADMIN (resolveOrgScope fails closed otherwise)
       if (!orgId) {
         const [totalUsers, totalStudents, totalTeachers, totalFaculty, activeExams] = await Promise.all([
           prisma.user.count({ where: { status: { not: 'DELETED' } } }),
@@ -2246,7 +2347,7 @@ export class AdminController {
       });
     } catch (err: any) {
       logger.error(`[Admin:getDashboardStats] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
   static async getSystemHealth(req: Request, res: Response) {
@@ -2336,16 +2437,21 @@ export class AdminController {
         };
       });
 
+      // FE SystemHealthPage expects redis.usedGB/totalGB + uptime %. Existing getSystemHealth.
+      // User: Cannot read properties of undefined (reading 'usedGB') — fix ASAP.
       const memoryUsage = process.memoryUsage();
-      const memUsedGB = (memoryUsage.heapUsed / 1024 / 1024 / 1024).toFixed(2);
-      const memTotalGB = (memoryUsage.heapTotal / 1024 / 1024 / 1024).toFixed(2);
+      const memUsedGB = Number((memoryUsage.heapUsed / 1024 / 1024 / 1024).toFixed(2));
+      const memTotalGB = Number((memoryUsage.heapTotal / 1024 / 1024 / 1024).toFixed(2));
+      const uptimeSeconds = process.uptime();
 
       res.json({
         success: true,
         data: {
-          uptimeSeconds: process.uptime(),
+          uptimeSeconds,
+          uptime: Math.min(99.99, Number(((uptimeSeconds / (uptimeSeconds + 1)) * 100).toFixed(2))),
           dbLatencyMs: pgLatencyMs,
           redisConnected: isRedisConnected(),
+          redis: { usedGB: memUsedGB, totalGB: memTotalGB },
           traffic24h: finalTraffic,
           aiProviders: aiLatency,
           events: events,
@@ -2354,7 +2460,7 @@ export class AdminController {
       });
     } catch (err: any) {
       logger.error(`[Admin:getSystemHealth] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -2477,7 +2583,7 @@ export class AdminController {
       });
     } catch (err: any) {
       logger.error(`[Admin:getProviders] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -2491,7 +2597,7 @@ export class AdminController {
       // Check if LibraryResource has entries, if not seed initial default official documents
       const count = await prisma.libraryResource.count();
       if (count === 0) {
-        const adminUser = (await prisma.user.findFirst({ where: { role: 'SUPER_ADMIN' } })) || (await prisma.user.findFirst());
+        const adminUser = (await prisma.user.findFirst({ where: { role: 'SUPER_ADMIN' } }));
         const defaultOrg = await prisma.organization.findFirst();
         if (adminUser && defaultOrg) {
           await prisma.libraryResource.createMany({
@@ -2617,7 +2723,7 @@ export class AdminController {
       });
     } catch (err: any) {
       logger.error(`[Admin:getKnowledgeStats] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -2685,8 +2791,11 @@ export class AdminController {
       }
 
       // Determine target org ID
-      let targetOrgId = organizationId || req.user?.activeOrganizationId || req.user?.organizationId;
-      if (!targetOrgId) {
+      // Only a SUPER_ADMIN may target another organization; everyone else uploads into their own.
+      const callerOrgId = realOrgId(req.user?.activeOrganizationId) || realOrgId(req.user?.organizationId);
+      const isSuper = req.user?.role === 'SUPER_ADMIN';
+      let targetOrgId = isSuper ? (organizationId || callerOrgId) : callerOrgId;
+      if (!targetOrgId && isSuper) {
         const defaultOrg = await prisma.organization.findFirst();
         targetOrgId = defaultOrg?.id;
       }
@@ -2715,7 +2824,7 @@ export class AdminController {
       res.status(201).json({ success: true, data: resource });
     } catch (err: any) {
       logger.error(`[Admin:createKnowledgeResource] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -2728,7 +2837,8 @@ export class AdminController {
 
       const { id } = req.params;
       const resource = await prisma.libraryResource.findUnique({ where: { id } });
-      if (!resource) {
+      const deleteCallerOrg = realOrgId(req.user?.activeOrganizationId) || realOrgId(req.user?.organizationId);
+      if (!resource || (req.user?.role !== 'SUPER_ADMIN' && (!deleteCallerOrg || resource.organizationId !== deleteCallerOrg))) {
         res.status(404).json({ success: false, error: 'Resource not found.' });
         return;
       }
@@ -2750,7 +2860,7 @@ export class AdminController {
       res.json({ success: true, message: 'Resource deleted successfully.' });
     } catch (err: any) {
       logger.error(`[Admin:deleteKnowledgeResource] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 
@@ -2820,7 +2930,7 @@ export class AdminController {
       });
     } catch (err: any) {
       logger.error(`[Admin:getGlobalDirectoryData] ${err}`);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(err?.statusCode || 500).json({ success: false, error: err.message });
     }
   }
 }

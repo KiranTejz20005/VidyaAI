@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { logger } from '../../utils/logger';
+import { getRequestOrgId, isSuperAdmin } from '../../security/request-context';
 import { OrganizationService } from '../../services/admin/organization.service';
 import { actorFromRequest } from '../../services/admin/admin-scope';
 import { DepartmentService } from '../../services/admin/department.service';
@@ -7,9 +8,18 @@ import { sendSuccess, sendCreated, sendError, sendNotFound, sendBadRequest } fro
 import { createOrganizationSchema, updateOrganizationSchema, createDepartmentSchema } from './validators';
 import { serializeOrganization, serializeOrganizationDetail, serializeDepartment, serializeOrganizationUsage } from './serializers';
 
-export const listOrganizations = async (_req: Request, res: Response): Promise<void> => {
+/**
+ * Only a SUPER_ADMIN may address an organization other than their own. Anyone
+ * else gets "not found" for foreign ids so tenants cannot be enumerated.
+ */
+function canAccessOrganization(req: Request, orgId: string): boolean {
+  return isSuperAdmin(req.user?.role) || orgId === getRequestOrgId(req);
+}
+
+export const listOrganizations = async (req: Request, res: Response): Promise<void> => {
   try {
-    const orgs = await OrganizationService.getOrganizations();
+    const all = await OrganizationService.getOrganizations();
+    const orgs = isSuperAdmin(req.user?.role) ? all : all.filter((o: { id: string }) => canAccessOrganization(req, o.id));
     sendSuccess(res, { data: orgs.map(serializeOrganization) });
   } catch (error: any) {
     logger.error({ err: error }, '[listOrganizations]');
@@ -22,6 +32,10 @@ export const getOrganization = async (req: Request, res: Response): Promise<void
     const { id } = req.params;
     if (!id) {
       sendBadRequest(res, 'Organization ID is required');
+      return;
+    }
+    if (!canAccessOrganization(req, id)) {
+      sendNotFound(res, 'Organization not found');
       return;
     }
     const org = await OrganizationService.getOrganizationById(id);
@@ -50,6 +64,10 @@ export const createOrganization = async (req: Request, res: Response): Promise<v
 export const updateOrganization = async (req: Request, res: Response): Promise<void> => {
   try {
     const { params, body } = updateOrganizationSchema.parse({ params: req.params, body: req.body });
+    if (!canAccessOrganization(req, params.id)) {
+      sendNotFound(res, 'Organization not found');
+      return;
+    }
     const org = await OrganizationService.getOrganizationById(params.id);
     if (!org) {
       sendNotFound(res, 'Organization not found');
@@ -90,6 +108,10 @@ export const listDepartments = async (req: Request, res: Response): Promise<void
       sendBadRequest(res, 'Organization ID is required');
       return;
     }
+    if (!canAccessOrganization(req, id)) {
+      sendNotFound(res, 'Organization not found');
+      return;
+    }
     const departments = await DepartmentService.getDepartments(id);
     sendSuccess(res, { data: departments.map(serializeDepartment) });
   } catch (error: any) {
@@ -101,6 +123,10 @@ export const listDepartments = async (req: Request, res: Response): Promise<void
 export const createDepartment = async (req: Request, res: Response): Promise<void> => {
   try {
     const { params, body } = createDepartmentSchema.parse({ params: req.params, body: req.body });
+    if (!canAccessOrganization(req, params.id)) {
+      sendNotFound(res, 'Organization not found');
+      return;
+    }
     const org = await OrganizationService.getOrganizationById(params.id);
     if (!org) {
       sendNotFound(res, 'Organization not found');
@@ -122,6 +148,10 @@ export const getOrganizationUsage = async (req: Request, res: Response): Promise
     const { id } = req.params;
     if (!id) {
       sendBadRequest(res, 'Organization ID is required');
+      return;
+    }
+    if (!canAccessOrganization(req, id)) {
+      sendNotFound(res, 'Organization not found');
       return;
     }
     const org = await OrganizationService.getOrganizationById(id);
