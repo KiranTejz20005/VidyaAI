@@ -12,7 +12,7 @@ import toast from 'react-hot-toast';
 export default function WhiteLabelBrandingPage() {
   const [primaryColor, setPrimaryColor] = useState('#2563EB');
   const [secondaryColor, setSecondaryColor] = useState('#10B981');
-  const [fontFamily, setFontFamily] = useState('Inter');
+  const [fontFamily, setFontFamily] = useState('Geist');
 
   const handleSave = () => {
     toast.success('Branding settings saved. Changes will propagate globally.');
@@ -95,7 +95,7 @@ export default function WhiteLabelBrandingPage() {
               onChange={e => setFontFamily(e.target.value)}
               style={{ width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6 }}
             >
-              <option value="Inter">Inter (Default)</option>
+              <option value="Geist">Geist (Default)</option>
               <option value="Roboto">Roboto</option>
               <option value="Open Sans">Open Sans</option>
               <option value="Merriweather">Merriweather (Serif)</option>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { api } from '@/lib/api';
@@ -18,6 +18,9 @@ import {
   BookOpen,
 } from 'lucide-react';
 import Link from 'next/link';
+import { PageHeader } from '@/design-system/PageHeader';
+import { ErrorState } from '@/design-system/ErrorState';
+import { Skeleton } from '@/design-system/LoadingState';
 
 interface TeacherStats {
   totalStudents: number;
@@ -38,8 +41,7 @@ export default function TeacherDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const fetchStats = async () => {
+  const fetchStats = useCallback(async () => {
       try {
         setLoading(true);
         setError(null);
@@ -55,10 +57,11 @@ export default function TeacherDashboard() {
       } finally {
         setLoading(false);
       }
-    };
-
-    fetchStats();
   }, []);
+
+  useEffect(() => {
+    fetchStats();
+  }, [fetchStats]);
 
   const data = stats || {
     totalStudents: 0,
@@ -76,19 +79,19 @@ export default function TeacherDashboard() {
 
   if (loading) {
     return (
-      <div className="max-w-[1600px] mx-auto p-4 md:p-6 flex flex-col gap-6 text-slate-900 font-sans">
+      <div role="status" aria-busy="true" aria-label="Loading dashboard" className="max-w-[1600px] mx-auto flex flex-col gap-6">
         <div className="flex flex-col gap-2">
-          <div className="skeleton h-8 w-64 rounded-xl" />
-          <div className="skeleton h-4 w-96 rounded-lg" />
+          <Skeleton height={32} width={256} radius={12} />
+          <Skeleton height={16} width={384} radius={8} />
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="ds-stagger grid grid-cols-2 md:grid-cols-4 gap-4">
           {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="skeleton h-32 rounded-2xl" />
+            <Skeleton key={i} height={128} radius={16} />
           ))}
         </div>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="skeleton h-80 rounded-2xl lg:col-span-2" />
-          <div className="skeleton h-80 rounded-2xl" />
+        <div className="ds-stagger grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <Skeleton height={320} radius={16} className="lg:col-span-2" />
+          <Skeleton height={320} radius={16} />
         </div>
       </div>
     );
@@ -96,37 +99,33 @@ export default function TeacherDashboard() {
 
   return (
     <div className="max-w-[1600px] mx-auto text-slate-900 font-sans flex flex-col gap-6">
-      {/* Top Greeting & Action Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl md:text-3xl font-extrabold text-neutral-900 tracking-tight">
-            Welcome back, {teacherName}
-          </h1>
-          <p className="text-xs md:text-sm text-neutral-500 font-medium mt-1">
-            Faculty Command Center • Real-Time Classroom Analytics & Assessment Overview
-          </p>
-        </div>
+      <PageHeader
+        title={`Welcome back, ${teacherName}`}
+        subtitle="Faculty Command Center • Real-Time Classroom Analytics & Assessment Overview"
+        actions={
+          <>
+            <Link
+              href="/teacher/copilot"
+              className="ds-press ds-focus inline-flex min-h-10 items-center gap-2 rounded-xl border border-neutral-200/90 bg-white px-4 text-xs font-bold text-neutral-800 transition-colors hover:bg-neutral-50"
+            >
+              <Sparkles className="w-4 h-4 text-[#e05934]" aria-hidden />
+              <span>AI Lesson Copilot</span>
+            </Link>
+            <Link
+              href="/assignments/create"
+              className="ds-press ds-focus inline-flex min-h-10 items-center gap-2 rounded-xl bg-[#e05934] px-4 text-xs font-bold text-white transition-colors hover:bg-[#c94a2a]"
+            >
+              <Plus className="w-4 h-4" aria-hidden />
+              <span>Create Assignment</span>
+            </Link>
+          </>
+        }
+      />
 
-        <div className="flex items-center gap-3">
-          <Link
-            href="/teacher/copilot"
-            className="px-4 py-2.5 rounded-xl border border-neutral-200/90 bg-white hover:bg-neutral-50 text-neutral-800 text-xs font-bold transition-all shadow-2xs flex items-center gap-2"
-          >
-            <Sparkles className="w-4 h-4 text-[#e05934]" />
-            <span>AI Lesson Copilot</span>
-          </Link>
-          <Link
-            href="/assignments/create"
-            className="px-4 py-2.5 rounded-xl bg-[#e05934] hover:bg-[#c94a2a] text-white text-xs font-bold transition-all shadow-xs flex items-center gap-2"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Create Assignment</span>
-          </Link>
-        </div>
-      </div>
+      {error && <ErrorState message={error} onRetry={fetchStats} />}
 
       {/* 4-Card Primary Metric Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="ds-stagger grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
           {
             title: 'TOTAL STUDENTS',
@@ -177,7 +176,7 @@ export default function TeacherDashboard() {
                 </div>
               </div>
               <div>
-                <div className="text-2xl md:text-3xl font-extrabold text-neutral-900 tracking-tight">{m.value}</div>
+                <div className="text-2xl md:text-3xl font-extrabold text-neutral-900 tracking-tight tabular-nums">{m.value}</div>
                 <div className="text-xs text-neutral-500 font-medium mt-1">{m.sub}</div>
               </div>
             </motion.div>
@@ -186,7 +185,7 @@ export default function TeacherDashboard() {
       </div>
 
       {/* Main Two-Column Analytics Layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="ds-stagger grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left 2 Cols: Recent Assessments & Top Performers */}
         <div className="lg:col-span-2 flex flex-col gap-6">
           {/* Recent Test Statistics Card */}

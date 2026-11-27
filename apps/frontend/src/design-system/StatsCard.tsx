@@ -58,7 +58,7 @@ export function StatsCard({ icon, label, value, trend, trendValue }: StatsCardPr
           </span>
         )}
       </div>
-      <span style={{ fontSize: 'clamp(20px, 2vw, 24px)', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.5px', lineHeight: 1 }}>
+      <span className="tabular-nums" style={{ fontSize: 'clamp(20px, 2vw, 24px)', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.5px', lineHeight: 1 }}>
         {value}
       </span>
       <span style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>

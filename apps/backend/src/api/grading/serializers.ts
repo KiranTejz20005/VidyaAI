@@ -4,13 +4,15 @@ export function serializeGradingConfig(config: any): GradingConfigDto {
   return {
     id: config.id,
     assignmentId: config.assignmentId,
-    answerKeyText: config.answerKeyText,
+    answerKeyText: config.answerKeyText ?? '',
+    questionPaperName: config.questionPaperName ?? undefined,
+    autoEvaluate: config.autoEvaluate !== false,
     rubricId: config.rubricId ?? undefined,
     aiModel: config.aiModel ?? undefined,
     passingScore: config.passingScore ?? undefined,
     maxAttempts: config.maxAttempts ?? undefined,
-    gradingType: config.gradingType,
-    status: config.status,
+    gradingType: config.gradingType ?? 'AUTO',
+    status: config.status ?? 'ACTIVE',
     createdAt: config.createdAt.toISOString(),
     updatedAt: config.updatedAt.toISOString(),
   };
@@ -52,8 +54,11 @@ export function serializeEvaluation(evaluation: any): EvaluationDto {
     totalMarks: evaluation.totalMarks,
     generalFeedback: evaluation.generalFeedback,
     criteriaGrades: (evaluation.criteriaGrades ?? []).map((g: any) => ({
-      criterionId: g.criterionId,
-      criterionName: g.criterionName ?? '',
+      criterionId: g.criterionId ?? g.criteriaId,
+      criterionName: g.criterionName ?? g.name ?? '',
+      // Legacy aliases kept so existing review UIs keep working during the /grader cutover.
+      criteriaId: g.criteriaId ?? g.criterionId,
+      name: g.name ?? g.criterionName ?? '',
       score: g.score,
       maxScore: g.maxScore ?? g.maxMarks ?? 0,
       explanation: g.explanation ?? '',

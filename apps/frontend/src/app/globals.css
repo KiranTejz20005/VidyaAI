@@ -1,14 +1,5 @@
-@import url('https://fonts.googleapis.com/css2?family=Caveat:wght@500;600;700&family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Playfair+Display:ital,wght@1,500;1,600&family=JetBrains+Mono:wght@400;500;600&display=swap');
 @import "tailwindcss";
 @import "./landing.css";
-
-@font-face {
-  font-family: 'Priestacy';
-  src: url('/fonts/Priestacy.otf') format('opentype');
-  font-weight: normal;
-  font-style: normal;
-  font-display: swap;
-}
 
 @source '../components/**/*.tsx';
 @source '../components/**/*.ts';
@@ -16,12 +7,12 @@
 @source '../app/**/*.ts';
 
 @theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Cabinet Grotesk", "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-serif: "Playfair Display", ui-serif, Georgia, serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-  --font-handwriting: "Priestacy", "Caveat", "Brush Script MT", cursive;
-  --font-hand: "Priestacy", "Caveat", "Brush Script MT", cursive;
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-serif: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
+  --font-handwriting: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-hand: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
 }
 
 h1,
@@ -32,7 +23,7 @@ h3,
 }
 
 .font-handwriting {
-  font-family: "Priestacy", "Caveat", "Brush Script MT", cursive;
+  font-family: var(--font-sans);
 }
 
 @keyframes textShimmer {
@@ -128,7 +119,8 @@ h3,
   }
 
   body {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-family: var(--font-sans);
+    font-feature-settings: 'cv11', 'ss01';
     background-color: var(--bg-page);
     color: var(--text-primary);
     line-height: 1.5;
@@ -136,6 +128,56 @@ h3,
   }
 
   img, svg, video, canvas { max-width: 100%; height: auto; display: block; }
+
+  /*
+   * Neutralize browser autofill paint (Chrome/Edge blue wash + orange outline)
+   * so auth and form fields keep the designed white/neutral look.
+   */
+  input:-webkit-autofill,
+  input:-webkit-autofill:hover,
+  input:-webkit-autofill:focus,
+  input:-webkit-autofill:active,
+  textarea:-webkit-autofill,
+  textarea:-webkit-autofill:hover,
+  textarea:-webkit-autofill:focus,
+  select:-webkit-autofill,
+  select:-webkit-autofill:hover,
+  select:-webkit-autofill:focus {
+    -webkit-text-fill-color: #171717 !important;
+    caret-color: #171717;
+    color: #171717 !important;
+    border-color: #e5e5e5 !important;
+    outline: none !important;
+    box-shadow: 0 0 0 1000px #ffffff inset !important;
+    -webkit-box-shadow: 0 0 0 1000px #ffffff inset !important;
+    transition: background-color 99999s ease-out 0s, color 99999s ease-out 0s;
+    filter: none;
+  }
+
+  input:autofill,
+  textarea:autofill,
+  select:autofill {
+    background-color: #ffffff !important;
+    color: #171717 !important;
+    box-shadow: 0 0 0 1000px #ffffff inset !important;
+  }
+}
+
+.auth-field:-webkit-autofill,
+.auth-field:-webkit-autofill:hover,
+.auth-field:-webkit-autofill:focus,
+.auth-field:-webkit-autofill:active {
+  -webkit-text-fill-color: #171717 !important;
+  caret-color: #171717;
+  border-color: #e5e5e5 !important;
+  -webkit-box-shadow: 0 0 0 1000px #ffffff inset !important;
+  box-shadow: 0 0 0 1000px #ffffff inset !important;
+}
+
+.auth-field:focus {
+  border-color: #171717 !important;
+  box-shadow: 0 0 0 1px #171717 !important;
+  -webkit-box-shadow: 0 0 0 1px #171717 !important;
 }
 
 /* ── App Shell ── */
@@ -1857,7 +1899,7 @@ hr { border: none; border-top: 1px solid var(--border); }
 }
 
 /* ── Toasts ── */
-.toast-container { font-family: 'Inter', sans-serif; }
+.toast-container { font-family: var(--font-sans); }
 
 /* ── Generation Screen Animations ── */
 @keyframes float-slow {
@@ -3492,4 +3534,119 @@ html:has(#home-view) {
   --text-lg: 1.125rem;
   --text-xl: 1.25rem;
   --text-2xl: 1.5rem;
+}
+
+/* ════════════════════════════════════════════════════════════
+   Design foundation (Step 2): additive tokens + shared utilities.
+   Existing variable names above are unchanged.
+   ════════════════════════════════════════════════════════════ */
+:root {
+  /* Motion */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --dur-fast: 150ms;
+  --dur-base: 200ms;
+  --dur-slow: 250ms;
+  --press-scale: 0.96;
+
+  /* Type scale (extends --text-xs..2xl) */
+  --text-3xl: clamp(24px, 2vw, 32px);
+  --text-4xl: clamp(30px, 2.8vw, 40px);
+  --leading-tight: 1.2;
+  --leading-snug: 1.35;
+  --leading-normal: 1.5;
+  --tracking-tight: -0.02em;
+  --tracking-tighter: -0.03em;
+  --tracking-caps: 0.05em;
+
+  /* Concentric radii: outer = inner + padding */
+  --radius-xs: 4px;
+  --space-inset: 8px;
+  --radius-inner: calc(var(--radius-lg) - var(--space-inset));
+
+  /* Layered shadows (transparent; replace border-only depth) */
+  --shadow-ring: 0 0 0 1px rgba(0,0,0,0.06);
+  --shadow-layer-1: 0 0 0 1px rgba(0,0,0,0.05), 0 1px 2px rgba(0,0,0,0.05);
+  --shadow-layer-2: 0 0 0 1px rgba(0,0,0,0.05), 0 1px 2px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.06);
+  --shadow-layer-3: 0 0 0 1px rgba(0,0,0,0.05), 0 2px 4px rgba(0,0,0,0.04), 0 8px 24px rgba(0,0,0,0.08);
+  --focus-ring: 0 0 0 2px var(--bg-card), 0 0 0 4px var(--brand);
+  --hit-min: 40px;
+}
+
+@layer base {
+  h1, h2, h3, h4, .font-display {
+    letter-spacing: var(--tracking-tight);
+    line-height: var(--leading-tight);
+    text-wrap: balance;
+  }
+  h5, h6 { text-wrap: balance; }
+  p, li { text-wrap: pretty; }
+}
+
+/* Tabular numerals for numeric UI */
+.tabular-nums,
+.stat-value,
+.gen-stat-value,
+table td,
+table th,
+[data-numeric],
+.metric-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.text-balance { text-wrap: balance; }
+.text-pretty { text-wrap: pretty; }
+.tracking-heading { letter-spacing: var(--tracking-tight); }
+
+/* Press feedback: explicit properties only, never transition: all */
+.ds-press {
+  transition-property: transform, opacity, background-color, border-color, color, box-shadow;
+  transition-duration: var(--dur-fast);
+  transition-timing-function: var(--ease-out);
+}
+.ds-press:active:not(:disabled):not([aria-disabled="true"]) { transform: scale(var(--press-scale)); }
+
+/* Visible keyboard focus */
+.ds-focus:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* Skeleton */
+.ds-skeleton {
+  background: linear-gradient(90deg, var(--bg-hover) 25%, var(--border) 50%, var(--bg-hover) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s var(--ease-standard) infinite;
+  border-radius: var(--radius-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .ds-press:active:not(:disabled) { transform: none; }
+  .ds-skeleton { animation: none; }
+}
+
+/* ── Step 5: staggered reveal (transform + opacity, capped at 8 items) ── */
+@keyframes ds-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+.ds-stagger > * {
+  animation: ds-rise 240ms var(--ease-out) backwards;
+}
+.ds-stagger > *:nth-child(2) { animation-delay: 40ms; }
+.ds-stagger > *:nth-child(3) { animation-delay: 80ms; }
+.ds-stagger > *:nth-child(4) { animation-delay: 120ms; }
+.ds-stagger > *:nth-child(5) { animation-delay: 160ms; }
+.ds-stagger > *:nth-child(6) { animation-delay: 200ms; }
+.ds-stagger > *:nth-child(7) { animation-delay: 240ms; }
+.ds-stagger > *:nth-child(n+8) { animation-delay: 280ms; }
+@media (prefers-reduced-motion: reduce) {
+  .ds-stagger > * { animation: none; }
 }

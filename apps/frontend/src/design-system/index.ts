@@ -13,7 +13,7 @@ export { Table } from './Table';
 export { DataTable } from './DataTable';
 export { Dialog } from './Dialog';
 export { EmptyState } from './EmptyState';
-export { LoadingState } from './LoadingState';
+export { LoadingState, Skeleton } from './LoadingState';
 export { ErrorState } from './ErrorState';
 export { PageHeader } from './PageHeader';
 export { StatsCard } from './StatsCard';

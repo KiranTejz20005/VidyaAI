@@ -76,11 +76,22 @@ export const sessionIdParamSchema = z.object({
 });
 
 export const googleSigninSchema = z.object({
-  body: z.object({
-    token: z.string().min(20).max(4096),
-    role: z.enum(['STUDENT', 'TEACHER', 'FACULTY', 'ADMIN', 'SUPER_ADMIN']),
-    isSignUp: z.boolean().optional().default(false),
-  }),
+  body: z
+    .object({
+      token: z.string().min(20).max(4096),
+      /** Only used when creating a new account (`isSignUp: true`). Existing accounts use their stored role. */
+      role: z.enum(['STUDENT', 'TEACHER', 'FACULTY', 'ADMIN', 'SUPER_ADMIN']).optional(),
+      isSignUp: z.boolean().optional().default(false),
+    })
+    .superRefine((body, ctx) => {
+      if (body.isSignUp && !body.role) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['role'],
+          message: 'Role is required when signing up with Google',
+        });
+      }
+    }),
 });
 
 export const forgotPasswordSchema = z.object({

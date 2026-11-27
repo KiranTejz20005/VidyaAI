@@ -21,9 +21,13 @@ export function Tabs({ tabs, activeTab, onChange }: TabsProps) {
         return (
           <button
             key={tab.id}
+            type="button"
+            className="ds-press ds-focus"
+            aria-current={isActive ? 'page' : undefined}
             onClick={() => onChange(tab.id)}
             style={{
               padding: '10px 16px',
+              minHeight: 'var(--hit-min)',
               border: 'none',
               background: 'transparent',
               cursor: 'pointer',
@@ -32,7 +36,7 @@ export function Tabs({ tabs, activeTab, onChange }: TabsProps) {
               color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
               borderBottom: isActive ? '2px solid var(--brand)' : '2px solid transparent',
               marginBottom: -1,
-              transition: 'color 0.15s, border-color 0.15s',
+              transition: 'color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out)',
               fontFamily: 'inherit',
               whiteSpace: 'nowrap',
             }}

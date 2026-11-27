@@ -28,11 +28,16 @@ CREATE INDEX IF NOT EXISTS "CourseSyllabusUnit_organizationId_idx"
 
 DO $$
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'CourseSyllabusUnit_courseId_fkey'
-  ) THEN
+  IF to_regclass('public."Course"') IS NOT NULL
+     AND NOT EXISTS (
+       SELECT 1 FROM pg_constraint WHERE conname = 'CourseSyllabusUnit_courseId_fkey'
+     ) THEN
     ALTER TABLE "CourseSyllabusUnit"
       ADD CONSTRAINT "CourseSyllabusUnit_courseId_fkey"
       FOREIGN KEY ("courseId") REFERENCES "Course"("id") ON DELETE CASCADE ON UPDATE CASCADE;
   END IF;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+  WHEN undefined_table THEN NULL;
+  WHEN undefined_object THEN NULL;
 END $$;

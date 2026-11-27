@@ -15,6 +15,8 @@ import {
   bulkEvaluate,
   getBulkEvaluateJobStatus,
 } from './controller';
+import { uploadQuestionPaper, uploadSubmission } from '../../controllers/grader.controller';
+import { uploadMiddleware } from '../../middlewares/upload.middleware';
 import {
   assignmentIdParamSchema,
   submissionIdParamSchema,
@@ -59,6 +61,22 @@ router.get(
   gradePermission,
   validate(assignmentIdParamSchema),
   asyncHandler(listSubmissionsForGrading),
+);
+router.post(
+  '/question-paper/:assignmentId',
+  gradeStaff,
+  gradePermission,
+  validate(assignmentIdParamSchema),
+  uploadMiddleware.single('questionPaper'),
+  asyncHandler(uploadQuestionPaper),
+);
+router.post(
+  '/submissions/:assignmentId',
+  gradeStaff,
+  gradePermission,
+  validate(assignmentIdParamSchema),
+  uploadMiddleware.array('files', 10),
+  asyncHandler(uploadSubmission),
 );
 router.post(
   '/submissions/:submissionId/evaluate',

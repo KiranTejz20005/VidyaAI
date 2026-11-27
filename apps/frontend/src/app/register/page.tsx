@@ -225,7 +225,7 @@ export default function RegisterPage() {
           <title>Sign in with ${providerName}</title>
           <style>
             body {
-              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+              font-family: var(--font-sans);
               background-color: #f3f4f6;
               margin: 0;
               display: flex;
@@ -470,8 +470,8 @@ export default function RegisterPage() {
       return;
     }
 
-    if (password.length < 6) {
-      toast.error('Password must be at least 6 characters long.');
+    if (password.length < 8 || !/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(password)) {
+      toast.error('Password needs 8+ characters with upper, lower, and a number.');
       return;
     }
 
@@ -511,7 +511,7 @@ export default function RegisterPage() {
 
   if (showVerification) {
     return (
-      <div className="flex min-h-screen w-full items-center justify-center bg-neutral-50 p-4 font-sans text-neutral-900">
+      <div className="flex min-h-dvh w-full items-center justify-center bg-neutral-50 p-4 font-sans text-neutral-900">
         <motion.div
           initial={{ scale: 0.95, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
@@ -529,7 +529,7 @@ export default function RegisterPage() {
           </p>
           <button
             onClick={() => router.push('/login')}
-            className="w-full rounded-full bg-neutral-900 py-2.5 text-xs font-semibold text-white transition-opacity hover:opacity-90 active:scale-[0.98]"
+            className="ds-press ds-focus min-h-10 w-full rounded-full bg-neutral-900 py-2.5 text-xs font-semibold text-white transition-opacity hover:opacity-90"
           >
             Proceed to Sign In
           </button>
@@ -539,7 +539,7 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className="flex min-h-screen lg:h-screen w-full bg-white font-sans text-neutral-950 antialiased selection:bg-neutral-900 selection:text-white relative overflow-x-hidden lg:overflow-hidden">
+    <div className="flex min-h-dvh lg:h-dvh w-full bg-white font-sans text-neutral-950 antialiased selection:bg-neutral-900 selection:text-white relative overflow-x-hidden lg:overflow-hidden">
       {/* Left Form Section */}
       <div className="flex w-full flex-col justify-between lg:w-1/2 p-4 sm:p-6 lg:p-8 xl:p-10 h-full overflow-y-auto">
         {/* Header Branding */}
@@ -636,7 +636,8 @@ export default function RegisterPage() {
                     disabled={isSubmitting}
                     required
                     placeholder="John"
-                    className="w-full rounded-full border border-neutral-200 bg-white px-3.5 py-1.5 sm:py-2 text-xs sm:text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-900 focus:outline-none focus:ring-1 focus:ring-neutral-900 transition-all"
+                    autoComplete="given-name"
+                    className="auth-field w-full rounded-full border border-neutral-200 bg-white px-3.5 py-1.5 sm:py-2 text-xs sm:text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-900 focus:outline-none focus:ring-1 focus:ring-neutral-900 transition-[border-color,box-shadow] duration-150"
                   />
                 </div>
                 <div className="flex flex-col gap-1">
@@ -654,7 +655,8 @@ export default function RegisterPage() {
                     disabled={isSubmitting}
                     required
                     placeholder="Doe"
-                    className="w-full rounded-full border border-neutral-200 bg-white px-3.5 py-1.5 sm:py-2 text-xs sm:text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-900 focus:outline-none focus:ring-1 focus:ring-neutral-900 transition-all"
+                    autoComplete="family-name"
+                    className="auth-field w-full rounded-full border border-neutral-200 bg-white px-3.5 py-1.5 sm:py-2 text-xs sm:text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-900 focus:outline-none focus:ring-1 focus:ring-neutral-900 transition-[border-color,box-shadow] duration-150"
                   />
                 </div>
               </motion.div>
@@ -674,7 +676,8 @@ export default function RegisterPage() {
                   disabled={isSubmitting}
                   required
                   placeholder="Enter your email"
-                  className="w-full rounded-full border border-neutral-200 bg-white px-3.5 py-1.5 sm:py-2 text-xs sm:text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-900 focus:outline-none focus:ring-1 focus:ring-neutral-900 transition-all"
+                  autoComplete="email"
+                  className="auth-field w-full rounded-full border border-neutral-200 bg-white px-3.5 py-1.5 sm:py-2 text-xs sm:text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-900 focus:outline-none focus:ring-1 focus:ring-neutral-900 transition-[border-color,box-shadow] duration-150"
                 />
               </motion.div>
 
@@ -683,7 +686,7 @@ export default function RegisterPage() {
                   htmlFor="password"
                   className="text-xs font-semibold text-neutral-700"
                 >
-                  Password (min. 6 characters)
+                  Password (min. 8 characters, upper + lower + number)
                 </label>
                 <div className="relative">
                   <input
@@ -693,8 +696,10 @@ export default function RegisterPage() {
                     onChange={(e) => setPassword(e.target.value)}
                     disabled={isSubmitting}
                     required
+                    minLength={8}
                     placeholder="Create a strong password"
-                    className="w-full rounded-full border border-neutral-200 bg-white px-3.5 py-1.5 sm:py-2 pr-11 text-xs sm:text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-900 focus:outline-none focus:ring-1 focus:ring-neutral-900 transition-all"
+                    autoComplete="new-password"
+                    className="auth-field w-full rounded-full border border-neutral-200 bg-white px-3.5 py-1.5 sm:py-2 pr-11 text-xs sm:text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-900 focus:outline-none focus:ring-1 focus:ring-neutral-900 transition-[border-color,box-shadow] duration-150"
                   />
                   <button
                     type="button"

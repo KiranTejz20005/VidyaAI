@@ -58,6 +58,29 @@ function clearRefreshCookie(res: Response) {
 }
 
 // ── POST /auth/signup ──
+/**
+ * Every non-super-admin account needs an organization for tenant-scoped routes.
+ * Self-service signups start without one, so provision a personal workspace on demand.
+ * Idempotent: does nothing when the user already belongs to an organization.
+ */
+async function ensurePersonalOrganization<
+  U extends { id: string; email: string; role: string; firstName?: string | null; organizationId: string | null; activeOrganizationId: string | null },
+>(user: U): Promise<U> {
+  if (user.organizationId || user.role === 'SUPER_ADMIN') return user;
+  const label = (user.firstName || user.email.split('@')[0] || 'My').trim();
+  const code = `P${user.id.replace(/-/g, '').slice(0, 10).toUpperCase()}`;
+  const org = await prisma.organization.create({
+    data: { name: `${label}'s Workspace`, code, email: user.email },
+  });
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { organizationId: org.id, activeOrganizationId: org.id },
+  });
+  user.organizationId = org.id;
+  user.activeOrganizationId = org.id;
+  return user;
+}
+
 export const signup = async (req: Request, res: Response): Promise<void> => {
   const ipAddress = req.ip || '0.0.0.0';
   const userAgent = req.headers['user-agent'] || 'unknown';
@@ -105,6 +128,7 @@ export const signup = async (req: Request, res: Response): Promise<void> => {
         hasCompletedOnboarding: false,
       },
     });
+    await ensurePersonalOrganization(user);
 
     const accessToken = generateAccessToken({
       userId: user.id,
@@ -325,6 +349,8 @@ export const login = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
+    await ensurePersonalOrganization(user);
+
     // Generate tokens
     const accessToken = generateAccessToken({
       userId: user.id,
@@ -491,19 +517,34 @@ export const completeOnboarding = async (req: Request, res: Response): Promise<v
   try {
     const userId = getUserId(req);
 
-    const user = await prisma.user.update({
+    const updated = await prisma.user.update({
       where: { id: userId },
       data: {
         hasCompletedOnboarding: true,
         onboardingCompletedAt: new Date(),
       },
     });
+    const hadOrganization = Boolean(updated.organizationId);
+    const user = await ensurePersonalOrganization(updated);
+
+    // The JWT carries the organization id, so hand back a fresh token when one was just created.
+    const accessToken = hadOrganization
+      ? undefined
+      : generateAccessToken({
+          userId: user.id,
+          email: user.email,
+          role: user.role,
+          organizationId: user.organizationId,
+          activeOrganizationId: user.activeOrganizationId,
+          departmentId: user.departmentId,
+        });
 
     res.json({
       success: true,
       message: 'Onboarding completed successfully',
       data: {
         hasCompletedOnboarding: user.hasCompletedOnboarding,
+        ...(accessToken ? { accessToken } : {}),
       },
     });
   } catch (error) {

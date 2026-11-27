@@ -69,6 +69,17 @@ function saveBlob(blob: Blob, filename: string): void {
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), OBJECT_URL_TTL_MS);
 }
 
+/** Like LibraryService.getResources, but surfaces request failures so pages can render an error state. */
+export async function fetchLibraryResources(params?: {
+  subject?: string;
+  className?: string;
+  resourceType?: string;
+  search?: string;
+}): Promise<LibraryResource[]> {
+  const response = await apiClient.get<{ success: boolean; data: LibraryResource[] }>('/library', { params });
+  return Array.isArray(response.data?.data) ? response.data.data : [];
+}
+
 export const LibraryService = {
   uploadResource: async (formData: FormData): Promise<LibraryResource> => {
     // Note: apiClient uses axios, so we can post FormData directly

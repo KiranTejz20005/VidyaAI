@@ -11,6 +11,7 @@
     "dev:services": "docker compose up mongodb redis",
     "dev:all": "concurrently --kill-others-on-fail --names services,backend,frontend --prefix-colors magenta,blue,green \"npm run dev:services\" \"npm run dev --workspace=apps/backend\" \"npm run dev --workspace=apps/frontend\"",
     "build": "npm run build --workspace=apps/backend && npm run build --workspace=apps/frontend",
+    "migrate:deploy": "npm run migrate:deploy --workspace=apps/backend",
     "lint": "npm run lint --workspace=apps/frontend && npm run lint --workspace=apps/backend",
     "test": "npm run test --workspace=apps/backend && npm run test --workspace=apps/frontend"
   },

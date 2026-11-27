@@ -9,7 +9,9 @@
   "scripts": {
     "dev": "node --max-old-space-size=512 ../../node_modules/ts-node-dev/lib/bin.js --respawn --transpile-only --ignore-watch node_modules --ignore-watch dist --ignore-watch uploads src/app.ts",
     "build": "npx prisma generate && tsc",
+    "migrate:deploy": "node scripts/safe-migrate-deploy.mjs",
     "start": "node dist/app.js",
+    "start:migrate": "node scripts/safe-migrate-deploy.mjs && node dist/app.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:connections": "ts-node-dev --transpile-only --exit-child src/scripts/test-connections.ts",

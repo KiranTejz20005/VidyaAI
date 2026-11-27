@@ -11,6 +11,15 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { apiClient } from '@/services/api.client';
+import {
+  saveGradingConfig,
+  getGradingConfigOrNull,
+  listSubmissionsForGrading,
+  evaluateSubmission,
+  uploadQuestionPaper,
+  uploadAnswerSheets,
+} from '@/services/grading.service';
+import { listRubrics as fetchRubrics, createRubric as createRubricApi, deleteRubric as deleteRubricApi } from '@/services/rubrics.service';
 import Link from 'next/link';
 import { AssessmentUploadView } from '@/components/grader/AssessmentUploadView';
 import { DashboardView } from '@/components/grader/GradingDashboardView';
@@ -208,11 +217,11 @@ export default function GraderDashboard() {
       setLoading(true);
       const [assignRes, rubRes] = await Promise.all([
         apiClient.get<{ success: boolean; data: any }>('/assignments'),
-        apiClient.get<{ success: boolean; data: Rubric[] }>('/grader/rubrics'),
+        fetchRubrics(1, 100),
       ]);
       const fetchedAssignments = assignRes.data.data.assignments || assignRes.data.data || [];
       setAssignments(fetchedAssignments);
-      setRubrics(rubRes.data.data);
+      setRubrics(rubRes.data as unknown as Rubric[]);
     } catch {
       toast.error('Failed to load initial data');
     } finally {
@@ -227,8 +236,7 @@ export default function GraderDashboard() {
   const loadSubmissions = async (assignmentId: string): Promise<Submission[]> => {
     try {
       setSubmissionsLoading(true);
-      const res = await apiClient.get<{ success: boolean; data: Submission[] }>(`/grader/assignments/${assignmentId}/submissions`);
-      const list = res.data.data || [];
+      const list = ((await listSubmissionsForGrading(assignmentId)) as unknown as Submission[]) || [];
       setSubmissions(list);
       return list;
     } catch {
@@ -250,12 +258,12 @@ export default function GraderDashboard() {
       .catch(() => setGeneratedPaper(null))
       .finally(() => setPaperLoading(false));
     try {
-      const res = await apiClient.get<{ success: boolean; data: GradingConfig | null }>(`/grader/assignments/${assignment.id}/config`);
-      if (res.data.data) {
-        setRubricId(res.data.data.rubricId || '');
-        setAnswerKey(res.data.data.answerKeyText || '');
-        setQuestionPaperName(res.data.data.questionPaperName || null);
-        setAutoEvaluate(res.data.data.autoEvaluate !== false);
+      const cfg = (await getGradingConfigOrNull(assignment.id)) as GradingConfig | null;
+      if (cfg) {
+        setRubricId(cfg.rubricId || '');
+        setAnswerKey(cfg.answerKeyText || '');
+        setQuestionPaperName(cfg.questionPaperName || null);
+        setAutoEvaluate(cfg.autoEvaluate !== false);
       } else {
         setRubricId('');
         setAnswerKey('');
@@ -274,7 +282,7 @@ export default function GraderDashboard() {
     if (!selectedAssignment) return;
     setSavingConfig(true);
     try {
-      await apiClient.post(`/grader/assignments/${selectedAssignment.id}/config`, {
+      await saveGradingConfig(selectedAssignment.id, {
         rubricId: rubricId || null,
         answerKeyText: answerKey,
         autoEvaluate,
@@ -291,7 +299,7 @@ export default function GraderDashboard() {
     if (!selectedAssignment || submissionIds.length === 0) return;
     try {
       for (const submissionId of submissionIds) {
-        await apiClient.post(`/grader/submissions/${submissionId}/evaluate`);
+        await evaluateSubmission(submissionId);
       }
       toast.success(`${submissionIds.length} student${submissionIds.length === 1 ? '' : 's'} evaluated successfully`);
       await loadSubmissions(selectedAssignment.id);
@@ -308,7 +316,7 @@ export default function GraderDashboard() {
 
     try {
       // 1. Save grading configuration
-      await apiClient.post(`/grader/assignments/${selectedAssignment.id}/config`, {
+      await saveGradingConfig(selectedAssignment.id, {
         rubricId: rubricId || null,
         answerKeyText: answerKey,
         autoEvaluate: true,
@@ -318,9 +326,9 @@ export default function GraderDashboard() {
       let lastEval: any = null;
       for (const submissionId of submissionIds) {
         try {
-          const res = await apiClient.post(`/grader/submissions/${submissionId}/evaluate`);
-          if (res?.data?.data) {
-            lastEval = res.data.data;
+          const evaluation = await evaluateSubmission(submissionId);
+          if (evaluation) {
+            lastEval = evaluation;
           }
         } catch (e: any) {
           console.warn('Evaluation request warning:', e);
@@ -618,13 +626,9 @@ export default function GraderDashboard() {
   const handleQuestionPaperUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!selectedAssignment || !file) return;
-    const formData = new FormData();
-    formData.append('questionPaper', file);
     setSavingConfig(true);
     try {
-      await apiClient.post(`/grader/assignments/${selectedAssignment.id}/question-paper`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
+      await uploadQuestionPaper(selectedAssignment.id, file);
       setQuestionPaperName(file.name);
       toast.success('Question paper uploaded and mapped to this evaluation');
     } catch (error: any) {
@@ -642,7 +646,7 @@ export default function GraderDashboard() {
   const handleDeleteRubric = async (id: string) => {
     if (!confirm('Are you sure you want to delete this rubric?')) return;
     try {
-      await apiClient.delete(`/grader/rubrics/${id}`);
+      await deleteRubricApi(id);
       setRubrics(rubrics.filter(r => r.id !== id));
       toast.success('Rubric deleted successfully');
       if (rubricId === id) setRubricId('');
@@ -658,12 +662,12 @@ export default function GraderDashboard() {
     }
     setCreatingRubric(true);
     try {
-      const res = await apiClient.post<{ success: boolean; data: Rubric }>('/grader/rubrics', {
+      const created = await createRubricApi({
         title: rubricTitle,
         description: rubricDesc,
         criteria,
-      });
-      setRubrics([res.data.data, ...rubrics]);
+      } as unknown as Parameters<typeof createRubricApi>[0]);
+      setRubrics([created as unknown as Rubric, ...rubrics]);
       toast.success('Rubric created successfully');
       setShowCreateRubric(false);
       setRubricTitle('');
@@ -679,16 +683,11 @@ export default function GraderDashboard() {
   const handleUploadSubmission = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!selectedAssignment || !e.target.files || e.target.files.length === 0) return;
     const files = Array.from(e.target.files);
-    const formData = new FormData();
-    files.forEach((file) => formData.append('files', file));
-
     setUploading(true);
     try {
-      const response = await apiClient.post<{ success: boolean; data: Array<{ evaluated: boolean; error?: string; pendingReason?: string }> }>(`/grader/assignments/${selectedAssignment.id}/submissions`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      const evaluated = response.data.data.filter((item) => item.evaluated).length;
-      const failed = response.data.data.filter((item) => item.error).length;
+      const results = await uploadAnswerSheets(selectedAssignment.id, files);
+      const evaluated = results.filter((item) => item.evaluated).length;
+      const failed = results.filter((item) => item.error).length;
       toast.success(evaluated ? `${evaluated} answer sheet${evaluated === 1 ? '' : 's'} uploaded and evaluated` : `${files.length} answer sheet${files.length === 1 ? '' : 's'} uploaded`);
       if (failed) toast.error(`${failed} sheet${failed === 1 ? '' : 's'} could not be evaluated; use Regrade after checking the configuration.`);
       loadSubmissions(selectedAssignment.id);
@@ -703,7 +702,7 @@ export default function GraderDashboard() {
   const handleEvaluateSubmission = async (submissionId: string) => {
     toast.loading('AI Evaluation in progress...', { id: submissionId });
     try {
-      await apiClient.post(`/grader/submissions/${submissionId}/evaluate`);
+      await evaluateSubmission(submissionId);
       toast.success('AI Evaluation completed', { id: submissionId });
       if (selectedAssignment) {
         loadSubmissions(selectedAssignment.id);

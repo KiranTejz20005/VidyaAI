@@ -12,7 +12,7 @@ export default function CommunityLayout({ children }: { children: React.ReactNod
         bottom: 0,
         background: '#f8f9fb',
         overflow: 'hidden',
-        fontFamily: 'Inter, system-ui, sans-serif',
+        fontFamily: 'inherit',
       }}
     >
       <div style={{ flex: 1, display: 'flex', minWidth: 0, overflow: 'hidden' }}>

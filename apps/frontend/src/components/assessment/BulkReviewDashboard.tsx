@@ -17,7 +17,6 @@ import {
   XCircle,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { api } from '@/lib/api';
 import {
   bulkEvaluate,
   getBulkEvaluateJobStatus,
@@ -82,33 +81,6 @@ function classifyBucket(
   if (s === 'GRADED' || hasEvaluation) return 'evaluated';
   if (s === 'FAILED') return 'failed';
   return 'pending_processing';
-}
-
-function mapLegacySubmission(raw: Record<string, unknown>): BulkReviewRow {
-  const evaluations = (raw.evaluations as unknown[]) ?? [];
-  const latest = evaluations[0] as Record<string, unknown> | undefined;
-  const status = String(raw.status ?? 'SUBMITTED');
-  const hasEvaluation = evaluations.length > 0;
-  const confidence = averageConfidence(evaluations);
-  const isOverridden = Boolean(latest?.isOverridden);
-  const needsReview =
-    normalizeStatus(status) === 'UNDER_REVIEW' ||
-    (confidence !== null && confidence < 0.7 && !isOverridden);
-
-  return {
-    id: String(raw.id),
-    studentId: String(raw.studentId),
-    studentName: String(raw.studentName ?? 'Student'),
-    status,
-    submittedAt: String(raw.submittedAt ?? raw.createdAt ?? new Date().toISOString()),
-    score: latest ? Number(latest.score) : undefined,
-    totalMarks: latest ? Number(latest.totalMarks) : undefined,
-    bucket: classifyBucket(status, hasEvaluation, false),
-    needsReview,
-    confidence,
-    hasEvaluation,
-    isOverridden,
-  };
 }
 
 function mapGatewaySubmission(raw: Record<string, unknown>): BulkReviewRow {
@@ -238,18 +210,8 @@ export function BulkReviewDashboard({ assignmentId }: BulkReviewDashboardProps) 
     try {
       setLoading(true);
       setError(null);
-      let mapped: BulkReviewRow[] = [];
-      try {
-        const data = await listSubmissionsForGrading(assignmentId);
-        mapped = (data as unknown as Record<string, unknown>[]).map(mapGatewaySubmission);
-      } catch {
-        const res = await api.get(`/grader/assignments/${assignmentId}/submissions`);
-        if (res.data?.success && Array.isArray(res.data.data)) {
-          mapped = res.data.data.map((s: Record<string, unknown>) => mapLegacySubmission(s));
-        } else {
-          throw new Error('Failed to load submissions');
-        }
-      }
+      const data = await listSubmissionsForGrading(assignmentId);
+      const mapped = (data as unknown as Record<string, unknown>[]).map(mapGatewaySubmission);
       setRows(mapped);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load submissions');

@@ -2,7 +2,14 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { api } from '@/lib/api';
+import {
+  getStudentAttendance,
+  listStudentLeaves,
+  submitStudentLeave,
+  type AttendanceRecord,
+  type AttendanceStats,
+  type LeaveApplication,
+} from '@/services/attendance.service';
 import toast from 'react-hot-toast';
 import {
   ChevronLeft,
@@ -16,36 +23,8 @@ import {
   Plus,
 } from 'lucide-react';
 import { LoadingState } from '@/design-system/LoadingState';
+import { ErrorState } from '@/design-system/ErrorState';
 import { Button } from '@/components/ui/button';
-
-interface AttendanceRecord {
-  id: string;
-  date: string;
-  status: 'PRESENT' | 'ABSENT' | 'LATE' | 'EXCUSED';
-  subject?: string;
-}
-
-interface SubjectStat {
-  subject: string;
-  percentage: number;
-}
-
-interface AttendanceStats {
-  totalClasses: number;
-  presentClasses: number;
-  percentage: number;
-  diffFromLastMonth?: number;
-  subjectAttendance: SubjectStat[];
-}
-
-interface LeaveApplication {
-  id: string;
-  title: string;
-  subject: string;
-  status: string;
-  createdAt: string;
-  body?: string;
-}
 
 // ── SVG Micro Bar Chart ──
 function MetricBars({ values, color = '#e05934' }: { values: number[]; color?: string }) {
@@ -90,44 +69,24 @@ export default function AttendanceDashboardPage() {
   // Calendar State (Default to current date)
   const [currentMonth, setCurrentMonth] = useState(new Date());
 
+  const [loadError, setLoadError] = useState<string | null>(null);
+
   const fetchAttendance = useCallback(async () => {
     try {
-      const month = currentMonth.getMonth();
-      const year = currentMonth.getFullYear();
-      const res = await api.get<{
-        success: boolean;
-        data: { records: AttendanceRecord[]; stats: AttendanceStats };
-      }>(`/attendance/student?month=${month}&year=${year}`);
-      setRecords(res.data?.data?.records || []);
+      setLoadError(null);
+      const [attendance, leaveList] = await Promise.all([
+        getStudentAttendance(currentMonth.getMonth(), currentMonth.getFullYear()),
+        listStudentLeaves(),
+      ]);
+      setRecords(attendance?.records ?? []);
       setStats(
-        res.data?.data?.stats || {
-          totalClasses: 24,
-          presentClasses: 22,
-          percentage: 92,
-          subjectAttendance: [
-            { subject: 'Database Management Systems', percentage: 95 },
-            { subject: 'Web Technologies & Frameworks', percentage: 90 },
-            { subject: 'Cyber Security & Cryptography', percentage: 88 },
-          ],
-        }
+        attendance?.stats ?? { totalClasses: 0, presentClasses: 0, percentage: 0, subjectAttendance: [] }
       );
-
-      const leaveRes = await api.get<{ success: boolean; data: LeaveApplication[] }>(
-        '/attendance/student/leave'
-      );
-      setLeaves(leaveRes.data?.data || []);
-    } catch {
-      // Graceful fallback for mock demo
-      setStats({
-        totalClasses: 24,
-        presentClasses: 22,
-        percentage: 92,
-        subjectAttendance: [
-          { subject: 'Database Management Systems', percentage: 95 },
-          { subject: 'Web Technologies & Frameworks', percentage: 90 },
-          { subject: 'Cyber Security & Cryptography', percentage: 88 },
-        ],
-      });
+      setLeaves(leaveList);
+    } catch (err: any) {
+      const message = err?.response?.data?.error || err?.response?.data?.message || 'Failed to load attendance';
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -141,7 +100,7 @@ export default function AttendanceDashboardPage() {
     e.preventDefault();
     setSubmittingLeave(true);
     try {
-      await api.post('/attendance/student/leave', leaveForm);
+      await submitStudentLeave(leaveForm);
       toast.success('Leave application submitted successfully');
       setIsModalOpen(false);
       setLeaveForm({ title: '', subject: '', body: '', duration: '' });
@@ -182,7 +141,7 @@ export default function AttendanceDashboardPage() {
     });
 
     if (record) return record.status;
-    return 'PRESENT'; // Baseline present for demo weekdays
+    return 'NONE'; // No attendance recorded for this day
   };
 
   const renderCalendarCell = (day: number, isCurrentMonth: boolean) => {
@@ -224,10 +183,21 @@ export default function AttendanceDashboardPage() {
   };
 
   if (loading) return <LoadingState lines={8} />;
+  if (loadError) {
+    return (
+      <ErrorState
+        message={loadError}
+        onRetry={() => {
+          setLoading(true);
+          fetchAttendance();
+        }}
+      />
+    );
+  }
 
-  const presentPercentage = stats.percentage ?? 92;
-  const daysPresent = stats.presentClasses ?? 22;
-  const totalClasses = stats.totalClasses ?? 24;
+  const presentPercentage = stats.percentage ?? 0;
+  const daysPresent = stats.presentClasses ?? 0;
+  const totalClasses = stats.totalClasses ?? 0;
   const absences = Math.max(0, totalClasses - daysPresent);
 
   return (

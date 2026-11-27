@@ -18,7 +18,6 @@ import {
   TrendingUp,
   Layers,
   ChevronDown,
-  Calendar,
 } from 'lucide-react';
 import {
   Bar,
@@ -32,7 +31,8 @@ import {
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth.store';
 import { useAdminAuthStore } from '@/store/admin-auth.store';
-import { LoadingState } from '@/design-system/LoadingState';
+import { Skeleton } from '@/design-system/LoadingState';
+import { PageHeader } from '@/design-system/PageHeader';
 import { ErrorState } from '@/design-system/ErrorState';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/base-ui/avatar';
 import { cn } from '@/lib/utils';
@@ -188,6 +188,7 @@ export default function AdminDashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const [selectedRange, setSelectedRange] = useState('Aug 2026');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [selectedFaculty, setSelectedFaculty] = useState<FacultyPerformanceItem | null>(null);
@@ -218,16 +219,27 @@ export default function AdminDashboard() {
         setLoading(false);
       }
     })();
-  }, [activeOrganizationId, isAdmin]);
+  }, [activeOrganizationId, isAdmin, reloadKey]);
 
-  if (loading) return <LoadingState lines={8} />;
-  if (error) return <ErrorState message={error} onRetry={() => { setLoading(true); setError(null); }} />;
+  if (loading) {
+    return (
+      <div role="status" aria-busy="true" aria-label="Loading dashboard" className="flex flex-col gap-6 p-4 md:p-8 max-w-[1600px] mx-auto">
+        <Skeleton height={32} width="min(320px, 70%)" radius={12} />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {[1, 2, 3, 4].map((i) => (
+            <Skeleton key={i} height={136} radius={16} />
+          ))}
+        </div>
+        <Skeleton height={320} radius={16} />
+      </div>
+    );
+  }
+  if (error) return <ErrorState message={error} onRetry={() => setReloadKey((k) => k + 1)} />;
 
   if (!isAdmin) {
     return (
-      <div className="flex flex-col gap-6 p-6">
-        <h1 className="text-2xl font-bold text-neutral-900">Dashboard</h1>
-        <p className="text-neutral-500">You do not have permission to view the administrator dashboard.</p>
+      <div className="flex flex-col gap-6 p-4 md:p-8">
+        <PageHeader title="Dashboard" subtitle="You do not have permission to view the administrator dashboard." />
       </div>
     );
   }
@@ -393,19 +405,10 @@ export default function AdminDashboard() {
   return (
     <div className="flex flex-col gap-6 p-4 md:p-8 max-w-[1600px] mx-auto">
       {/* ── 1. Header Greeting Section ── */}
-      <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-        <div className="flex flex-col gap-1.5">
-          <h1 className="text-2xl md:text-3xl font-semibold tracking-tight text-neutral-900">
-            Good Morning, {user?.firstName ? `${user.firstName} ${user.lastName || ''}`.trim() : 'Administrator'}
-          </h1>
-          <div className="flex items-center gap-2 text-sm text-neutral-500 font-medium">
-            <Calendar className="size-4 text-neutral-400" />
-            <span>{todayFormatted}</span>
-            <span className="text-neutral-300">•</span>
-            <span className="text-neutral-500 font-normal">Academic Session 2026-27</span>
-          </div>
-        </div>
-
+      <PageHeader
+        title={`Good Morning, ${user?.firstName ? `${user.firstName} ${user.lastName || ''}`.trim() : 'Administrator'}`}
+        subtitle={`${todayFormatted} • Academic Session 2026-27`}
+        actions={
         <div className="flex flex-wrap items-center gap-2.5">
           <Button
             type="button"
@@ -419,9 +422,10 @@ export default function AdminDashboard() {
 
           <div className="relative">
             <select
+              aria-label="Reporting period"
               value={selectedRange}
               onChange={(e) => setSelectedRange(e.target.value)}
-              className="h-9.5 appearance-none rounded-xl border border-neutral-200 bg-white pl-3.5 pr-8 text-xs font-semibold text-neutral-700 shadow-xs hover:bg-neutral-50 focus:outline-hidden cursor-pointer"
+              className="min-h-10 appearance-none rounded-xl border border-neutral-200 bg-white pl-3.5 pr-8 text-xs font-semibold text-neutral-700 shadow-xs hover:bg-neutral-50 ds-focus cursor-pointer"
             >
               <option value="Aug 2026">Aug 1 – 31, 2026</option>
               <option value="Jul 2026">Jul 1 – 31, 2026</option>
@@ -440,7 +444,8 @@ export default function AdminDashboard() {
             </Button>
           </Link>
         </div>
-      </section>
+        }
+      />
 
       {/* ── 2. Top 4 Metric Cards (Live Real Numbers from DB) ── */}
       <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -456,7 +461,7 @@ export default function AdminDashboard() {
           </div>
           <div className="flex items-end justify-between gap-2">
             <div>
-              <p className="text-2xl font-bold tracking-tight text-neutral-900">
+              <p className="text-2xl font-bold tracking-tight text-neutral-900 tabular-nums">
                 {totalFaculty}
               </p>
               <p className="mt-1 text-xs font-medium text-emerald-600 flex items-center gap-1">
@@ -480,7 +485,7 @@ export default function AdminDashboard() {
           </div>
           <div className="flex items-end justify-between gap-2">
             <div>
-              <p className="text-2xl font-bold tracking-tight text-neutral-900">
+              <p className="text-2xl font-bold tracking-tight text-neutral-900 tabular-nums">
                 {totalStudents.toLocaleString()}
               </p>
               <p className="mt-1 text-xs font-medium text-neutral-500">
@@ -503,7 +508,7 @@ export default function AdminDashboard() {
           </div>
           <div className="flex items-end justify-between gap-2">
             <div>
-              <p className="text-2xl font-bold tracking-tight text-neutral-900">
+              <p className="text-2xl font-bold tracking-tight text-neutral-900 tabular-nums">
                 {totalClasses}
               </p>
               <p className="mt-1 text-xs font-medium text-neutral-500">
@@ -526,7 +531,7 @@ export default function AdminDashboard() {
           </div>
           <div className="flex items-end justify-between gap-2">
             <div>
-              <p className="text-2xl font-bold tracking-tight text-neutral-900">
+              <p className="text-2xl font-bold tracking-tight text-neutral-900 tabular-nums">
                 {pendingApprovals}
               </p>
               <p className="mt-1 text-xs font-medium text-amber-600 flex items-center gap-1">
@@ -735,7 +740,7 @@ export default function AdminDashboard() {
                 <select
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}
-                  className="h-8 rounded-lg border border-neutral-200 bg-white px-2.5 text-xs font-semibold text-neutral-700 shadow-2xs hover:bg-neutral-50 focus:outline-hidden cursor-pointer"
+                  className="h-8 rounded-lg border border-neutral-200 bg-white px-2.5 text-xs font-semibold text-neutral-700 shadow-2xs hover:bg-neutral-50 ds-focus cursor-pointer"
                 >
                   <option value="ALL">All Statuses</option>
                   <option value="COMPLETED">Completed</option>

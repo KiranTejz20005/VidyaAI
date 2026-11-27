@@ -66,7 +66,7 @@ export function MetricCard({ icon, label, value, trend, trendValue, description,
         )}
       </div>
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12, marginTop: 'auto' }}>
-        <span style={{ fontSize: 'clamp(32px, 3vw, 40px)', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.5px', lineHeight: 1 }}>
+        <span className="tabular-nums" style={{ fontSize: 'clamp(32px, 3vw, 40px)', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.5px', lineHeight: 1 }}>
           {value}
         </span>
         {badgeText && (

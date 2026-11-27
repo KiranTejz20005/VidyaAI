@@ -140,7 +140,7 @@ export function OrgAdminSidebar() {
       <aside
         role="navigation"
         aria-label="Org Admin Navigation"
-        className={`fixed top-0 left-0 bottom-0 h-screen bg-white text-neutral-900 border-r border-neutral-200/90 flex flex-col z-40 transition-[width,transform] duration-300 ease-in-out shadow-xs ${
+        className={`fixed top-0 left-0 bottom-0 h-dvh pt-[var(--sat)] pb-[var(--sab)] pl-[var(--sal)] bg-white text-neutral-900 border-r border-neutral-200/90 flex flex-col z-40 transition-[width,transform] duration-300 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none shadow-xs ${
           isCollapsed ? 'w-[72px]' : 'w-[260px]'
         } ${isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}
       >
