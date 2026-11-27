@@ -1,5 +1,7 @@
-﻿-- Assessment pipeline models + Assignment/User fields.
+-- Assessment pipeline models + Assignment/User fields.
 -- Guarded for databases previously created with prisma db push.
+-- FK adds must not abort the migration when a referenced table is missing
+-- (that is what left this migration stuck as "failed" / P3009 on Render).
 
 ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "emailVerified" BOOLEAN NOT NULL DEFAULT false;
 
@@ -7,10 +9,15 @@ ALTER TABLE "Assignment" ADD COLUMN IF NOT EXISTS "assessmentMode" TEXT NOT NULL
 ALTER TABLE "Assignment" ADD COLUMN IF NOT EXISTS "courseId" TEXT;
 
 DO $$ BEGIN
-  ALTER TABLE "Assignment"
-    ADD CONSTRAINT "Assignment_courseId_fkey"
-    FOREIGN KEY ("courseId") REFERENCES "Course"("id") ON DELETE SET NULL ON UPDATE CASCADE;
-EXCEPTION WHEN duplicate_object THEN NULL;
+  IF to_regclass('public."Course"') IS NOT NULL AND to_regclass('public."Assignment"') IS NOT NULL THEN
+    ALTER TABLE "Assignment"
+      ADD CONSTRAINT "Assignment_courseId_fkey"
+      FOREIGN KEY ("courseId") REFERENCES "Course"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+  END IF;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+  WHEN undefined_table THEN NULL;
+  WHEN undefined_object THEN NULL;
 END $$;
 
 CREATE INDEX IF NOT EXISTS "Assignment_courseId_idx" ON "Assignment"("courseId");
@@ -28,7 +35,7 @@ CREATE TABLE IF NOT EXISTS "DocumentProcessingJob" (
     "idempotencyKey" TEXT,
     "metadata" JSONB,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "DocumentProcessingJob_pkey" PRIMARY KEY ("id")
 );
 
@@ -37,10 +44,15 @@ CREATE INDEX IF NOT EXISTS "DocumentProcessingJob_organizationId_idx" ON "Docume
 CREATE INDEX IF NOT EXISTS "DocumentProcessingJob_status_idx" ON "DocumentProcessingJob"("status");
 
 DO $$ BEGIN
-  ALTER TABLE "DocumentProcessingJob"
-    ADD CONSTRAINT "DocumentProcessingJob_organizationId_fkey"
-    FOREIGN KEY ("organizationId") REFERENCES "Organization"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-EXCEPTION WHEN duplicate_object THEN NULL;
+  IF to_regclass('public."Organization"') IS NOT NULL THEN
+    ALTER TABLE "DocumentProcessingJob"
+      ADD CONSTRAINT "DocumentProcessingJob_organizationId_fkey"
+      FOREIGN KEY ("organizationId") REFERENCES "Organization"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+  WHEN undefined_table THEN NULL;
+  WHEN undefined_object THEN NULL;
 END $$;
 
 CREATE TABLE IF NOT EXISTS "AnswerSheetPage" (
@@ -59,10 +71,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS "AnswerSheetPage_submissionId_pageNo_key" ON "
 CREATE INDEX IF NOT EXISTS "AnswerSheetPage_submissionId_idx" ON "AnswerSheetPage"("submissionId");
 
 DO $$ BEGIN
-  ALTER TABLE "AnswerSheetPage"
-    ADD CONSTRAINT "AnswerSheetPage_submissionId_fkey"
-    FOREIGN KEY ("submissionId") REFERENCES "StudentSubmission"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-EXCEPTION WHEN duplicate_object THEN NULL;
+  IF to_regclass('public."StudentSubmission"') IS NOT NULL THEN
+    ALTER TABLE "AnswerSheetPage"
+      ADD CONSTRAINT "AnswerSheetPage_submissionId_fkey"
+      FOREIGN KEY ("submissionId") REFERENCES "StudentSubmission"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+  WHEN undefined_table THEN NULL;
+  WHEN undefined_object THEN NULL;
 END $$;
 
 CREATE TABLE IF NOT EXISTS "ExtractedAnswer" (
@@ -76,7 +93,7 @@ CREATE TABLE IF NOT EXISTS "ExtractedAnswer" (
     "pageNo" INTEGER,
     "bbox" JSONB,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "ExtractedAnswer_pkey" PRIMARY KEY ("id")
 );
 
@@ -84,10 +101,15 @@ CREATE INDEX IF NOT EXISTS "ExtractedAnswer_submissionId_idx" ON "ExtractedAnswe
 CREATE INDEX IF NOT EXISTS "ExtractedAnswer_submissionId_reviewStatus_idx" ON "ExtractedAnswer"("submissionId", "reviewStatus");
 
 DO $$ BEGIN
-  ALTER TABLE "ExtractedAnswer"
-    ADD CONSTRAINT "ExtractedAnswer_submissionId_fkey"
-    FOREIGN KEY ("submissionId") REFERENCES "StudentSubmission"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-EXCEPTION WHEN duplicate_object THEN NULL;
+  IF to_regclass('public."StudentSubmission"') IS NOT NULL THEN
+    ALTER TABLE "ExtractedAnswer"
+      ADD CONSTRAINT "ExtractedAnswer_submissionId_fkey"
+      FOREIGN KEY ("submissionId") REFERENCES "StudentSubmission"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+  WHEN undefined_table THEN NULL;
+  WHEN undefined_object THEN NULL;
 END $$;
 
 CREATE TABLE IF NOT EXISTS "EvaluationRevision" (
@@ -105,17 +127,27 @@ CREATE INDEX IF NOT EXISTS "EvaluationRevision_evaluationId_idx" ON "EvaluationR
 CREATE INDEX IF NOT EXISTS "EvaluationRevision_actorId_idx" ON "EvaluationRevision"("actorId");
 
 DO $$ BEGIN
-  ALTER TABLE "EvaluationRevision"
-    ADD CONSTRAINT "EvaluationRevision_evaluationId_fkey"
-    FOREIGN KEY ("evaluationId") REFERENCES "SubmissionEvaluation"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-EXCEPTION WHEN duplicate_object THEN NULL;
+  IF to_regclass('public."SubmissionEvaluation"') IS NOT NULL THEN
+    ALTER TABLE "EvaluationRevision"
+      ADD CONSTRAINT "EvaluationRevision_evaluationId_fkey"
+      FOREIGN KEY ("evaluationId") REFERENCES "SubmissionEvaluation"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+  WHEN undefined_table THEN NULL;
+  WHEN undefined_object THEN NULL;
 END $$;
 
 DO $$ BEGIN
-  ALTER TABLE "EvaluationRevision"
-    ADD CONSTRAINT "EvaluationRevision_actorId_fkey"
-    FOREIGN KEY ("actorId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-EXCEPTION WHEN duplicate_object THEN NULL;
+  IF to_regclass('public."User"') IS NOT NULL THEN
+    ALTER TABLE "EvaluationRevision"
+      ADD CONSTRAINT "EvaluationRevision_actorId_fkey"
+      FOREIGN KEY ("actorId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+  WHEN undefined_table THEN NULL;
+  WHEN undefined_object THEN NULL;
 END $$;
 
 CREATE TABLE IF NOT EXISTS "BulkAssessmentJob" (
@@ -133,7 +165,7 @@ CREATE TABLE IF NOT EXISTS "BulkAssessmentJob" (
     "error" TEXT,
     "createdById" TEXT NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "BulkAssessmentJob_pkey" PRIMARY KEY ("id")
 );
 
@@ -143,22 +175,37 @@ CREATE INDEX IF NOT EXISTS "BulkAssessmentJob_status_idx" ON "BulkAssessmentJob"
 CREATE INDEX IF NOT EXISTS "BulkAssessmentJob_createdById_idx" ON "BulkAssessmentJob"("createdById");
 
 DO $$ BEGIN
-  ALTER TABLE "BulkAssessmentJob"
-    ADD CONSTRAINT "BulkAssessmentJob_assignmentId_fkey"
-    FOREIGN KEY ("assignmentId") REFERENCES "Assignment"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-EXCEPTION WHEN duplicate_object THEN NULL;
+  IF to_regclass('public."Assignment"') IS NOT NULL THEN
+    ALTER TABLE "BulkAssessmentJob"
+      ADD CONSTRAINT "BulkAssessmentJob_assignmentId_fkey"
+      FOREIGN KEY ("assignmentId") REFERENCES "Assignment"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+  WHEN undefined_table THEN NULL;
+  WHEN undefined_object THEN NULL;
 END $$;
 
 DO $$ BEGIN
-  ALTER TABLE "BulkAssessmentJob"
-    ADD CONSTRAINT "BulkAssessmentJob_organizationId_fkey"
-    FOREIGN KEY ("organizationId") REFERENCES "Organization"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-EXCEPTION WHEN duplicate_object THEN NULL;
+  IF to_regclass('public."Organization"') IS NOT NULL THEN
+    ALTER TABLE "BulkAssessmentJob"
+      ADD CONSTRAINT "BulkAssessmentJob_organizationId_fkey"
+      FOREIGN KEY ("organizationId") REFERENCES "Organization"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+  WHEN undefined_table THEN NULL;
+  WHEN undefined_object THEN NULL;
 END $$;
 
 DO $$ BEGIN
-  ALTER TABLE "BulkAssessmentJob"
-    ADD CONSTRAINT "BulkAssessmentJob_createdById_fkey"
-    FOREIGN KEY ("createdById") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-EXCEPTION WHEN duplicate_object THEN NULL;
+  IF to_regclass('public."User"') IS NOT NULL THEN
+    ALTER TABLE "BulkAssessmentJob"
+      ADD CONSTRAINT "BulkAssessmentJob_createdById_fkey"
+      FOREIGN KEY ("createdById") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+  WHEN undefined_table THEN NULL;
+  WHEN undefined_object THEN NULL;
 END $$;

@@ -5,8 +5,10 @@ services:
     env: node
     region: oregon
     plan: starter
-    buildCommand: npm install && npm run build --workspace=apps/backend
-    startCommand: cd apps/backend && npx prisma migrate deploy && node dist/app.js
+    # Use migrate:deploy (not raw `prisma migrate deploy`) so P3009 failed
+    # migrations are cleared and DIRECT_URL is used (pooler hangs on locks).
+    buildCommand: npm install && npm run migrate:deploy --workspace=apps/backend && npm run build --workspace=apps/backend
+    startCommand: cd apps/backend && node dist/app.js
     healthCheckPath: /health
     envVars:
       - key: NODE_ENV
