@@ -72,7 +72,7 @@ export function Button({
     <button
       id={id}
       type={type}
-      className={className}
+      className={['ds-press ds-focus', className].filter(Boolean).join(' ')}
       disabled={disabled || loading}
       onClick={onClick}
       {...rest}
@@ -92,7 +92,7 @@ export function Button({
         lineHeight: 1.3,
         fontFamily: 'inherit',
         opacity: disabled ? 0.55 : 1,
-        transition: 'all 0.15s ease',
+        minHeight: 'var(--hit-min)',
         ...(variant === 'primary' && hovered && !disabled ? { background: 'var(--brand-hover)', boxShadow: '0 4px 12px color-mix(in srgb, var(--brand) 30%, transparent)' } : {}),
         ...(variant === 'secondary' && hovered && !disabled ? { background: 'var(--bg-hover)', borderColor: 'var(--border-strong)' } : {}),
         ...(variant === 'outline' && hovered && !disabled ? { background: 'var(--brand-light)' } : {}),

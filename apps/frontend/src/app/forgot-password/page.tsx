@@ -68,7 +68,7 @@ export default function ForgotPasswordPage() {
           width: 100vw;
           background: #FFFFFF;
           display: flex;
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-sans);
           overflow: hidden;
         }
         .outer-frame {

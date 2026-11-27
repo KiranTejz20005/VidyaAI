@@ -159,7 +159,7 @@ export default function MessagesPage() {
   };
 
   return (
-    <div style={{ display: 'flex', height: '100%', width: '100%', background: '#f8fafc', color: '#0b1020', fontFamily: 'Inter, system-ui, sans-serif', padding: '24px', boxSizing: 'border-box' }}>
+    <div style={{ display: 'flex', height: '100%', width: '100%', background: '#f8fafc', color: '#0b1020', fontFamily: 'inherit', padding: '24px', boxSizing: 'border-box' }}>
       <div style={{ 
         display: 'flex', 
         width: '100%', 

@@ -28,6 +28,7 @@ export function Badge({ children, variant = 'draft', className }: BadgeProps) {
         alignItems: 'center',
         gap: 5,
         padding: '3px 10px',
+        minHeight: 22,
         borderRadius: 'var(--radius-pill)',
         fontSize: 'var(--text-xs)',
         fontWeight: 600,

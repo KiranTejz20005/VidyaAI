@@ -46,13 +46,14 @@ export function Input({ label, error, icon, className, style, ...props }: InputP
             fontFamily: 'inherit',
             color: 'var(--text-primary)',
             outline: 'none',
-            transition: 'border-color 0.15s, box-shadow 0.15s',
+            minHeight: 'var(--hit-min)',
+            transition: 'border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out)',
             boxSizing: 'border-box',
             ...style,
           }}
           onFocus={(e) => {
             e.currentTarget.style.borderColor = 'var(--border-focus)';
-            e.currentTarget.style.boxShadow = '0 0 0 3px rgba(232, 83, 29, 0.1)';
+            e.currentTarget.style.boxShadow = 'var(--focus-ring)';
             props.onFocus?.(e);
           }}
           onBlur={(e) => {

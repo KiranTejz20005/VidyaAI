@@ -135,7 +135,7 @@ function CallbackHandler() {
         alignItems: 'center',
         justifyContent: 'center',
         height: '100vh',
-        fontFamily: 'sans-serif',
+        fontFamily: 'var(--font-sans)',
         backgroundColor: '#f8fafc',
       }}
     >
@@ -171,7 +171,7 @@ export default function AuthCallbackPage() {
             alignItems: 'center',
             justifyContent: 'center',
             height: '100vh',
-            fontFamily: 'sans-serif',
+            fontFamily: 'var(--font-sans)',
             backgroundColor: '#f8fafc',
           }}
         >

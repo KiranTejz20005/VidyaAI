@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { EmptyState } from './EmptyState';
-import { LoadingState } from './LoadingState';
+import { Skeleton } from './LoadingState';
 
 interface Column {
   key: string;
@@ -21,6 +21,9 @@ interface DataTableProps {
   onRowClick?: (row: any) => void;
   getRowDataTestId?: (row: any) => string | undefined;
   className?: string;
+  /** Max height of the scroll area; header stays sticky inside it. */
+  maxHeight?: number | string;
+  caption?: string;
 }
 
 export function DataTable({
@@ -32,9 +35,17 @@ export function DataTable({
   onRowClick,
   getRowDataTestId,
   className,
+  maxHeight = 'min(70vh, 640px)',
+  caption,
 }: DataTableProps) {
   if (loading) {
-    return <LoadingState lines={5} />;
+    return (
+      <div role="status" aria-busy="true" aria-label="Loading table" style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 16 }}>
+        {Array.from({ length: 5 }).map((_, i) => (
+          <Skeleton key={i} height={i === 0 ? 20 : 40} radius={8} />
+        ))}
+      </div>
+    );
   }
 
   if (!data || data.length === 0) {
@@ -48,14 +59,21 @@ export function DataTable({
   }
 
   return (
-    <div className={className} style={{ overflowX: 'auto', width: '100%' }}>
+    <div className={className} style={{ overflow: 'auto', width: '100%', maxHeight }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--text-sm)' }}>
+        {caption && <caption className="sr-only">{caption}</caption>}
         <thead>
-          <tr style={{ borderBottom: '1px solid var(--border)' }}>
+          <tr>
             {columns.map((col) => (
               <th
                 key={col.key}
+                scope="col"
                 style={{
+                  position: 'sticky',
+                  top: 0,
+                  zIndex: 1,
+                  background: 'var(--bg-muted, #f8f8f8)',
+                  boxShadow: 'inset 0 -1px 0 var(--border)',
                   textAlign: col.align || 'left',
                   padding: '10px 14px',
                   fontWeight: 600,
@@ -78,10 +96,13 @@ export function DataTable({
               key={row.id || idx}
               data-testid={getRowDataTestId?.(row)}
               onClick={() => onRowClick?.(row)}
+              tabIndex={onRowClick ? 0 : undefined}
+              onKeyDown={onRowClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRowClick(row); } } : undefined}
+              className={onRowClick ? 'ds-focus' : undefined}
               style={{
                 borderBottom: '1px solid var(--border)',
                 cursor: onRowClick ? 'pointer' : undefined,
-                transition: 'background 0.1s',
+                transition: 'background-color 120ms ease-out',
               }}
               onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-hover)'; }}
               onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
@@ -93,6 +114,7 @@ export function DataTable({
                     textAlign: col.align || 'left',
                     padding: '12px 14px',
                     color: 'var(--text-primary)',
+                    fontVariantNumeric: 'tabular-nums',
                     whiteSpace: 'nowrap',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
