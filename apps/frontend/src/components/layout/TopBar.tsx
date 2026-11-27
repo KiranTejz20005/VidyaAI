@@ -111,7 +111,7 @@ export function Topbar() {
 
   return (
     <header
-      className={`sticky top-0 z-30 w-full px-3 sm:px-6 py-2.5 sm:py-3 bg-transparent transition-all duration-300 ease-in-out transform ${
+      className={`sticky top-0 z-30 w-full pl-[max(0.75rem,var(--sal))] pr-[max(0.75rem,var(--sar))] sm:px-6 pt-[max(0.625rem,var(--sat))] pb-2.5 sm:pb-3 bg-transparent transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none transform ${
         isVisible ? 'translate-y-0 opacity-100' : '-translate-y-full opacity-0 pointer-events-none'
       }`}
     >
@@ -122,7 +122,7 @@ export function Topbar() {
         <div className="flex items-center gap-2 min-w-0">
           <button
             onClick={toggle}
-            className="p-1.5 rounded-full text-neutral-500 hover:text-neutral-800 hover:bg-neutral-100 lg:hidden transition-colors"
+            className="ds-press ds-focus flex h-10 w-10 items-center justify-center rounded-full text-neutral-500 hover:text-neutral-800 hover:bg-neutral-100 lg:hidden transition-colors"
             aria-label="Toggle navigation menu"
           >
             <Menu className="w-4 h-4" />
@@ -131,7 +131,7 @@ export function Topbar() {
           {showBackButton && (
             <button
               onClick={() => window.history.back()}
-              className="p-1.5 rounded-full text-neutral-500 hover:text-neutral-900 hover:bg-neutral-100 transition-colors"
+              className="ds-press ds-focus flex h-10 w-10 items-center justify-center rounded-full text-neutral-500 hover:text-neutral-900 hover:bg-neutral-100 transition-colors"
               title="Go back"
               aria-label="Go back"
             >
@@ -197,7 +197,7 @@ export function Topbar() {
                 e.stopPropagation();
                 setIsNotificationOpen(!isNotificationOpen);
               }}
-              className="w-9 h-9 rounded-full bg-neutral-50 border border-neutral-200/80 flex items-center justify-center text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900 transition-colors relative"
+              className="ds-press ds-focus w-10 h-10 rounded-full bg-neutral-50 border border-neutral-200/80 flex items-center justify-center text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900 transition-colors relative"
               title="Notifications"
               aria-label="Notifications"
             >

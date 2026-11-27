@@ -16,6 +16,8 @@ import { TeacherSidebar } from './TeacherSidebar';
 import { Topbar } from './TopBar';
 import { AdminTopbar } from '@/components/admin/AdminTopbar';
 import { MobileBottomNav } from './MobileBottomNav';
+import { Breadcrumbs } from './Breadcrumbs';
+import { RouteTransition } from './RouteTransition';
 import { canAccessRoute } from '@/config/route-permissions';
 import { useSystemStore } from '@/store/system.store';
 import { AlertTriangle } from 'lucide-react';
@@ -154,10 +156,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       const isSuperAdminOrAdmin = userRole === 'SUPER_ADMIN' || userRole === 'ADMIN';
       const isOnboarded = isSuperAdminOrAdmin || user?.hasCompletedOnboarding === true || (user?.organizationId && user?.departmentId);
       
+      // Used by app/layout.tsx — sole shell gate for onboarding vs dashboard.
+      // Reads user.hasCompletedOnboarding; user asked: cannot skip onboarding.
       if (isOnboarded) {
         const dashboardRoute = getDashboardRoute(userRole);
-        if (isAuthPage) {
-          router.push(dashboardRoute);
+        if (isAuthPage || isOnboardingPage) {
+          router.replace(dashboardRoute);
         } else {
           const hasAccess = canAccessRoute(userRole, pathname);
 
@@ -261,21 +265,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <>
       <FullScreenLoader isLoading={(isLoading || isRedirectingToLogin) && !isPublicPage} />
-      <div suppressHydrationWarning className="flex min-h-screen w-full bg-white relative overflow-x-hidden">
+      <div suppressHydrationWarning className="flex min-h-dvh w-full bg-white relative overflow-x-hidden">
         {SidebarComponent}
         <div
           suppressHydrationWarning
-          className={`flex-1 flex flex-col min-h-screen w-full transition-[margin,width] duration-300 ease-in-out ${
+          className={`flex-1 flex flex-col min-h-dvh w-full min-w-0 transition-[margin,width] duration-300 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none ${
             isCollapsed
               ? 'ml-0 lg:ml-[72px] lg:w-[calc(100%-72px)]'
               : 'ml-0 lg:ml-[260px] lg:w-[calc(100%-260px)]'
           }`}
         >
           {TopbarComponent}
-          <main suppressHydrationWarning className="flex-1 p-4 sm:p-6 max-w-[1600px] mx-auto w-full overflow-x-hidden">
+          <main suppressHydrationWarning className="flex-1 min-w-0 pt-4 sm:pt-6 pb-[calc(76px+var(--sab))] lg:pb-6 pl-[max(1rem,var(--sal))] pr-[max(1rem,var(--sar))] sm:px-6 max-w-[1600px] mx-auto w-full overflow-x-hidden">
             <ClientOnly fallback={<div className="page-content-placeholder" aria-hidden="true" />}>
               <div key={user?.activeOrganizationId || 'default'}>
-                {children}
+                <Breadcrumbs />
+                <RouteTransition>{children}</RouteTransition>
               </div>
             </ClientOnly>
           </main>
@@ -284,6 +289,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <ClientOnly>
           <Toaster
             position="top-right"
+            containerStyle={{ top: 'calc(16px + env(safe-area-inset-top, 0px))', right: 'calc(16px + env(safe-area-inset-right, 0px))' }}
             toastOptions={{
               style: {
                 background: '#ffffff',

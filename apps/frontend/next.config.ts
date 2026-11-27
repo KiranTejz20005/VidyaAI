@@ -57,6 +57,12 @@ const nextConfig: NextConfig = {
         destination: "/teacher",
         permanent: true,
       },
+      // Legacy duplicate trees: every page under these prefixes exists at the
+      // canonical target (verified), and the legacy index pages already redirect.
+      { source: "/dashboard/teacher", destination: "/teacher", permanent: false },
+      { source: "/dashboard/teacher/:path*", destination: "/teacher/:path*", permanent: false },
+      { source: "/dashboard/student", destination: "/student", permanent: false },
+      { source: "/dashboard/student/:path*", destination: "/student/:path*", permanent: false },
     ];
   },
   async headers() {
