@@ -63,7 +63,8 @@ interface AuthStore {
   login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   googleLogin: (data: {
     token: string;
-    role: 'STUDENT' | 'TEACHER' | 'ADMIN';
+    /** Required only when creating a new account (`isSignUp: true`). */
+    role?: 'STUDENT' | 'TEACHER' | 'ADMIN';
     isSignUp: boolean;
   }) => Promise<{ success: boolean; error?: string }>;
   /** Google/SSO popup completion — maps onto `/auth/google` when a token is present. */
@@ -102,16 +103,23 @@ interface AuthStore {
     subject: string;
     students: Array<{ name: string; rollNo: string; email: string }>;
   }) => Promise<{ success: boolean; error?: string }>;
+  skipOnboarding: () => Promise<{ success: boolean; error?: string }>;
 }
 
 function applySession(set: (partial: Partial<AuthStore>) => void, user: User, token: string) {
   setApiToken(token);
+  const prev = useAuthStore.getState?.()?.user;
+  // Never let a stale /auth/me overwrite a just-completed onboarding flag.
+  const mergedUser =
+    prev?.hasCompletedOnboarding === true && user.hasCompletedOnboarding !== true
+      ? { ...user, hasCompletedOnboarding: true }
+      : user;
   set({
-    user,
+    user: mergedUser,
     accessToken: token,
     isAuthenticated: true,
     isLoading: false,
-    passwordResetRequired: user.forcePasswordReset === true,
+    passwordResetRequired: mergedUser.forcePasswordReset === true,
   });
 }
 
@@ -203,15 +211,24 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       return { success: false, error: 'Invalid response from auth server.' };
     } catch (err: any) {
       set({ isLoading: false });
-      return { success: false, error: err.message || 'Login failed.' };
+      return {
+        success: false,
+        error: err?.response?.data?.error || err.message || 'Invalid email or password.',
+      };
     }
   },
 
   googleLogin: async (data) => {
     try {
       set({ isLoading: true });
-      const role = data.role === 'ADMIN' ? 'TEACHER' : data.role;
-      const res = await api.post('/auth/google', { ...data, role });
+      const payload: Record<string, unknown> = {
+        token: data.token,
+        isSignUp: data.isSignUp === true,
+      };
+      if (data.isSignUp && data.role) {
+        payload.role = data.role === 'ADMIN' ? 'TEACHER' : data.role;
+      }
+      const res = await api.post('/auth/google', payload);
       const { accessToken, user } = res.data?.data || {};
       if (accessToken && user) {
         applySession(set, user, accessToken);
@@ -231,7 +248,11 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     }
     return get().googleLogin({
       token: data.token,
-      role: data.role === 'ADMIN' ? 'TEACHER' : data.role || 'TEACHER',
+      role: data.isSignUp
+        ? data.role === 'ADMIN'
+          ? 'TEACHER'
+          : data.role || 'STUDENT'
+        : undefined,
       isSignUp: data.isSignUp === true,
     });
   },
@@ -258,10 +279,11 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     }
   },
 
-  verifyOtp: async (email, code, role = 'STUDENT') => {
+  verifyOtp: async (email, code) => {
     try {
       set({ isLoading: true });
-      const res = await api.post('/auth/otp/verify', { email, code, role });
+      // Role is account-bound; do not send a client-selected role on login.
+      const res = await api.post('/auth/otp/verify', { email, code });
       const { accessToken, user } = res.data?.data || {};
       if (accessToken && user) {
         applySession(set, user, accessToken);
@@ -347,47 +369,116 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
   completeOnboarding: async (data) => {
     try {
-      await api.put('/auth/me/profile', {
-        firstName: data.firstName,
-        lastName: data.lastName,
-      });
+      const role = (get().user?.role || '').toUpperCase();
+      const isAdmin = role.includes('ADMIN');
+      const canManageClasses = isAdmin || role.includes('TEACHER') || role.includes('FACULTY');
 
-      const orgRes = await api.put('/auth/me/organization', {
-        organizationName: data.organizationName,
-        department: data.department,
-        academicYear: '2026-2027',
-      });
-
-      if (orgRes.data?.data?.accessToken) {
-        setApiToken(orgRes.data.data.accessToken);
-      }
-
-      const groupRes = await api.post('/groups', {
-        name: data.className,
-        subject: data.subject,
-      });
-      const group = groupRes.data?.data;
-
-      if (group?.id && data.students.length > 0) {
-        await api.post(`/groups/${group.id}/students/bulk`, {
-          students: data.students,
+      try {
+        await api.put('/auth/me/profile', {
+          firstName: data.firstName,
+          lastName: data.lastName,
         });
+      } catch {
+        /* non-fatal: profile can be updated later */
       }
 
-      await api.post('/auth/onboarding/complete');
-
-      const meRes = await api.get('/auth/me');
-      const user = meRes.data?.data;
-      if (user) {
-        set({ user });
+      // Organization edits are admin-only on the backend; other roles would get a 403.
+      // The optional steps below must never block completing onboarding.
+      if (isAdmin) {
+        try {
+          const orgRes = await api.put('/auth/me/organization', {
+            organizationName: data.organizationName,
+            department: data.department,
+            academicYear: '2026-2027',
+          });
+          if (orgRes.data?.data?.accessToken) {
+            setApiToken(orgRes.data.data.accessToken);
+          }
+        } catch {
+          /* non-fatal: can be configured later in settings */
+        }
       }
 
-      return { success: true };
+      if (canManageClasses) {
+        try {
+          const groupRes = await api.post('/groups', {
+            name: data.className,
+            subject: data.subject,
+          });
+          const group = groupRes.data?.data;
+          if (group?.id && data.students.length > 0) {
+            await api.post(`/groups/${group.id}/students/bulk`, {
+              students: data.students,
+            });
+          }
+        } catch {
+          /* non-fatal: classes can be created from the dashboard */
+        }
+      }
+
+      return await finishOnboarding(set);
     } catch (err: any) {
       return { success: false, error: err.message || 'Onboarding failed.' };
     }
   },
+
+  skipOnboarding: async () => {
+    try {
+      return await finishOnboarding(set);
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Could not skip onboarding.' };
+    }
+  },
 }));
+
+async function finishOnboarding(_set: (partial: Partial<AuthStore>) => void) {
+  const priorCompleted = useAuthStore.getState().user?.hasCompletedOnboarding === true;
+
+  // Optimistic: unblock AppShell immediately so skip/complete cannot soft-lock the user.
+  useAuthStore.setState((state) =>
+    state.user && !state.user.hasCompletedOnboarding
+      ? { user: { ...state.user, hasCompletedOnboarding: true } }
+      : state,
+  );
+
+  try {
+    await api.post('/auth/onboarding/complete');
+  } catch (err) {
+    if (!priorCompleted) {
+      useAuthStore.setState((state) =>
+        state.user
+          ? { user: { ...state.user, hasCompletedOnboarding: false } }
+          : state,
+      );
+    }
+    throw err;
+  }
+
+  // Authoritative after a successful complete — never accept a stale false from /me.
+  useAuthStore.setState((state) =>
+    state.user
+      ? { user: { ...state.user, hasCompletedOnboarding: true } }
+      : state,
+  );
+
+  try {
+    const meRes = await api.get('/auth/me');
+    const user = meRes.data?.data;
+    if (user) {
+      useAuthStore.setState((state) => ({
+        user: {
+          ...user,
+          hasCompletedOnboarding: true,
+          preferences: user.preferences ?? state.user?.preferences ?? {},
+        },
+      }));
+    }
+  } catch {
+    /* local flag already set — AppShell can proceed */
+  }
+
+  return { success: true as const };
+}
 
 /** Prefer a token set during the /auth/me round-trip (e.g. a concurrent refresh) over the bootstrap one. */
 function getCurrentToken(fallback: string): string {

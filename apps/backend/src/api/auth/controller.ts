@@ -243,7 +243,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     }
 
     // Account state is only revealed to someone who proved the password.
-    // emailVerified is persisted but not enforced at login yet (legacy/seeded users).
+    // Account state is only revealed to someone who proved the password.
     await assertUserCanAuthenticate(user);
     await clearFailedLogins(email, ipAddress);
 
@@ -372,16 +372,11 @@ export const googleSignin = async (req: Request, res: Response): Promise<void> =
     let user = await prisma.user.findUnique({ where: { email: identity.email } });
 
     if (user) {
-      const storedRole = user.role;
-      if (storedRole !== requestedRole) {
-        sendForbidden(res, `This Google account is linked to a ${user.role} profile. Use the ${user.role.toLowerCase().replace('_', ' ')} sign-in.`);
-        return;
-      }
+      // Role is bound to the account — never accept a client-selected role on login.
       await assertUserCanAuthenticate(user);
-      const updateData: { authProvider?: string; avatar?: string; emailVerified?: boolean } = {};
+      const updateData: { authProvider?: string; avatar?: string } = {};
       if (user.authProvider === 'LOCAL') updateData.authProvider = 'GOOGLE';
       if (identity.picture && !user.avatar) updateData.avatar = identity.picture;
-      if (!user.emailVerified) updateData.emailVerified = true;
       if (Object.keys(updateData).length > 0) {
         user = await prisma.user.update({ where: { id: user.id }, data: updateData });
       }
@@ -390,7 +385,7 @@ export const googleSignin = async (req: Request, res: Response): Promise<void> =
         sendError(res, { error: 'Account not found. Please sign up first.', code: 'ACCOUNT_NOT_FOUND', statusCode: 404 });
         return;
       }
-      if (!SELF_SERVICE_ROLES.has(requestedRole)) {
+      if (!requestedRole || !SELF_SERVICE_ROLES.has(requestedRole)) {
         sendForbidden(res, 'Administrator accounts are created by invitation only.');
         return;
       }

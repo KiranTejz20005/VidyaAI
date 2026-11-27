@@ -79,7 +79,7 @@ const POPULAR_INTERESTS = [
 
 export default function OnboardingPage() {
   const router = useRouter();
-  const { user, completeOnboarding, isAuthenticated, isLoading } = useAuthStore();
+  const { user, completeOnboarding, skipOnboarding, isAuthenticated, isLoading } = useAuthStore();
 
   // Role resolution
   const userRole = useMemo(() => {
@@ -118,7 +118,6 @@ export default function OnboardingPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
   const [progressText, setProgressText] = useState('');
-  const [dismissed, setDismissed] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -382,11 +381,30 @@ export default function OnboardingPage() {
         }
         setIsFinished(true);
         toast.success('Onboarding complete!');
+        router.replace(getDashboardRoute(user?.role || userRole));
       } else {
         toast.error(result.error || 'Failed to complete onboarding.');
       }
     } catch (err: any) {
       toast.error(err.message || 'An error occurred during onboarding.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleSkip = async () => {
+    setIsSubmitting(true);
+    setProgressText('Opening your dashboard...');
+    try {
+      const result = await skipOnboarding();
+      if (result.success) {
+        toast.success('Setup skipped — you can finish this later.');
+        router.replace(getDashboardRoute(user?.role || userRole));
+        return;
+      }
+      toast.error(result.error || 'Could not skip setup.');
+    } catch (err: any) {
+      toast.error(err.message || 'Could not skip setup.');
     } finally {
       setIsSubmitting(false);
     }
@@ -401,22 +419,6 @@ export default function OnboardingPage() {
     return (
       <div className="flex min-h-dvh items-center justify-center bg-background">
         <Loader2 className="size-8 animate-spin text-emerald-500" />
-      </div>
-    );
-  }
-
-  if (dismissed) {
-    return (
-      <div className="flex min-h-dvh items-center justify-center bg-background p-4">
-        <div className="text-center">
-          <p className="text-muted-foreground text-sm">Onboarding setup dismissed</p>
-          <button
-            className="mt-2 text-emerald-600 dark:text-emerald-400 text-sm font-semibold hover:underline"
-            onClick={() => setDismissed(false)}
-          >
-            Show setup wizard again
-          </button>
-        </div>
       </div>
     );
   }
@@ -472,6 +474,16 @@ export default function OnboardingPage() {
                 style={{ width: `${progressPercent}%` }}
               />
             </div>
+            {allDone && !isSubmitting && !isFinished && (
+              <button
+                type="button"
+                onClick={handleSkip}
+                className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-3 text-sm font-bold text-white shadow-sm hover:bg-emerald-600 active:scale-[0.99]"
+              >
+                Go to dashboard
+                <ArrowRight className="size-4" />
+              </button>
+            )}
           </div>
         </div>
 
@@ -1049,14 +1061,16 @@ export default function OnboardingPage() {
           <div className="mt-6 flex items-center justify-between border-t border-border/50 pt-4 text-xs text-muted-foreground">
             <button
               type="button"
-              onClick={() => handleFinalSubmit()}
-              className="font-medium hover:text-foreground hover:underline"
+              onClick={handleSkip}
+              disabled={isSubmitting}
+              className="font-medium text-emerald-600 hover:text-emerald-700 hover:underline dark:text-emerald-400"
             >
               Skip setup & proceed to dashboard →
             </button>
             <button
               type="button"
-              onClick={() => setDismissed(true)}
+              onClick={handleSkip}
+              disabled={isSubmitting}
               className="hover:text-foreground hover:underline"
             >
               Dismiss checklist
