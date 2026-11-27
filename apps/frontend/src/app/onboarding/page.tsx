@@ -413,6 +413,24 @@ export default function OnboardingPage() {
     }
   };
 
+  const handleSkip = async () => {
+    setIsSubmitting(true);
+    setProgressText('Opening your dashboard...');
+    try {
+      const result = await skipOnboarding();
+      if (result.success) {
+        toast.success('Setup skipped — you can finish this later.');
+        router.replace(getDashboardRoute(user?.role || userRole));
+        return;
+      }
+      toast.error(result.error || 'Could not skip setup.');
+    } catch (err: any) {
+      toast.error(err.message || 'Could not skip setup.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const handleFinishRedirect = () => {
     const route = getDashboardRoute(user?.role || userRole);
     router.push(route);

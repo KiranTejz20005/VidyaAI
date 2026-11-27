@@ -455,9 +455,27 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 }));
 
 async function finishOnboarding(_set: (partial: Partial<AuthStore>) => void) {
-  // The flag is only set after the server confirms, so a failure leaves the user on
-  // /onboarding with a retry instead of flipping state back and forth.
-  await api.post('/auth/onboarding/complete');
+  const priorCompleted = useAuthStore.getState().user?.hasCompletedOnboarding === true;
+
+  // Optimistic: unblock AppShell immediately so skip/complete cannot soft-lock the user.
+  useAuthStore.setState((state) =>
+    state.user && !state.user.hasCompletedOnboarding
+      ? { user: { ...state.user, hasCompletedOnboarding: true } }
+      : state,
+  );
+
+  try {
+    await api.post('/auth/onboarding/complete');
+  } catch (err) {
+    if (!priorCompleted) {
+      useAuthStore.setState((state) =>
+        state.user
+          ? { user: { ...state.user, hasCompletedOnboarding: false } }
+          : state,
+      );
+    }
+    throw err;
+  }
 
   // Authoritative after a successful complete — never accept a stale false from /me.
   useAuthStore.setState((state) =>
