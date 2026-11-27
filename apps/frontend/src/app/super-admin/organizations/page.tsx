@@ -346,7 +346,7 @@ export default function SuperAdminOrganizations() {
                             const success = await switchOrganization(org.id);
                             if (success) {
                               toast.success(`Switched to ${org.name}`);
-                              window.location.href = '/dashboard/admin';
+                              window.location.href = '/admin';
                             } else {
                               toast.error('Failed to switch organization');
                             }

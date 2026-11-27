@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { api, refreshAccessToken, setApiToken } from '@/lib/api';
 import { endImpersonation } from '@/lib/impersonation';
 import { clearUserLocalData } from '@/lib/user-storage';
+import { normalizeRole } from '@/utils/navigation';
 import { socketService } from '@/services/socket.service';
 
 export interface User {
@@ -31,20 +32,9 @@ export interface User {
 
 export const hasRole = (userRole: string | undefined, requiredRoles: string[]): boolean => {
   if (!userRole) return false;
-  let normalized = userRole.toUpperCase();
-  if (normalized === 'ORG_ADMIN') normalized = 'ADMIN';
-  if (normalized === 'FACULTY') normalized = 'TEACHER';
-  
+  const normalized = normalizeRole(userRole);
   if (normalized === 'SUPER_ADMIN') return true;
-  
-  const normalizedRequired = requiredRoles.map(r => {
-    let n = r.toUpperCase();
-    if (n === 'ORG_ADMIN') n = 'ADMIN';
-    if (n === 'FACULTY') n = 'TEACHER';
-    return n;
-  });
-  
-  return normalizedRequired.includes(normalized);
+  return requiredRoles.map(normalizeRole).includes(normalized);
 };
 
 interface AuthStore {
@@ -58,7 +48,11 @@ interface AuthStore {
   setAuth: (user: User, token: string) => void;
   clearAuth: () => void;
   markPasswordResetRequired: () => void;
-  changePassword: (currentPassword: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
+  /** Pass `undefined` currentPassword when completing a forced first-login reset. */
+  changePassword: (
+    currentPassword: string | undefined,
+    newPassword: string,
+  ) => Promise<{ success: boolean; error?: string }>;
   initialize: () => Promise<boolean>;
   login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   googleLogin: (data: {
@@ -102,6 +96,8 @@ interface AuthStore {
     className: string;
     subject: string;
     students: Array<{ name: string; rollNo: string; email: string }>;
+    /** Extra profile answers with no dedicated backend column; stored in user.preferences.onboarding. */
+    profileExtras?: Record<string, unknown>;
   }) => Promise<{ success: boolean; error?: string }>;
   skipOnboarding: () => Promise<{ success: boolean; error?: string }>;
 }
@@ -122,6 +118,10 @@ function applySession(set: (partial: Partial<AuthStore>) => void, user: User, to
     passwordResetRequired: mergedUser.forcePasswordReset === true,
   });
 }
+
+/** The backend has no /auth/otp routes yet; shown whenever the Passwordless tab hits them. */
+export const OTP_UNAVAILABLE_MESSAGE =
+  'Passwordless email-code sign-in is not available yet. Use your password or Google instead.';
 
 export const useAuthStore = create<AuthStore>((set, get) => ({
   user: null,
@@ -159,7 +159,11 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
   changePassword: async (currentPassword, newPassword) => {
     try {
-      const res = await api.put('/auth/me/password', { currentPassword, newPassword });
+      const payload: { newPassword: string; currentPassword?: string } = { newPassword };
+      if (typeof currentPassword === 'string' && currentPassword.length > 0) {
+        payload.currentPassword = currentPassword;
+      }
+      const res = await api.put('/auth/me/password', payload);
       const token: unknown = res.data?.data?.accessToken;
       if (typeof token === 'string' && token) {
         setApiToken(token);
@@ -187,8 +191,14 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         applySession(set, user, getCurrentToken(token));
         return true;
       }
-    } catch {
-      // No valid session: fall through to the unauthenticated state.
+    } catch (err: any) {
+      const status: number | undefined = err?.response?.status;
+      if (status !== 401 && status !== 403) {
+        // Network failure or 5xx: the session may still be valid, so do not log the user out.
+        console.warn('Session check failed (not signing out):', err?.message || err);
+        set({ isLoading: false });
+        return get().isAuthenticated;
+      }
     }
     if (get().isAuthenticated) {
       set({ isLoading: false });
@@ -266,10 +276,10 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     } catch (err: any) {
       set({ isLoading: false });
       const status = err?.response?.status;
-      if (status === 404) {
+      if (status === 404 || status === 405 || status === 501) {
         return {
           success: false,
-          error: 'Email code login is not available. Sign in with Google instead.',
+          error: OTP_UNAVAILABLE_MESSAGE,
         };
       }
       return {
@@ -294,10 +304,10 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     } catch (err: any) {
       set({ isLoading: false });
       const status = err?.response?.status;
-      if (status === 404) {
+      if (status === 404 || status === 405 || status === 501) {
         return {
           success: false,
-          error: 'Email code login is not available. Sign in with Google instead.',
+          error: OTP_UNAVAILABLE_MESSAGE,
         };
       }
       return {
@@ -317,7 +327,11 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         return { success: true };
       }
       set({ isLoading: false });
-      return { success: false, error: 'Invalid response from auth server.' };
+      // Duplicate emails return 201 without tokens (anti-enumeration).
+      return {
+        success: false,
+        error: 'Registration could not be completed. Try signing in or use a different email.',
+      };
     } catch (err: any) {
       set({ isLoading: false });
       return { success: false, error: err.message || 'Signup failed.' };
@@ -382,6 +396,15 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         /* non-fatal: profile can be updated later */
       }
 
+      if (data.profileExtras && Object.keys(data.profileExtras).length > 0) {
+        try {
+          // /auth/me/preferences merges server-side into the user.preferences JSON column.
+          await api.put('/auth/me/preferences', { preferences: { onboarding: data.profileExtras } });
+        } catch {
+          /* non-fatal */
+        }
+      }
+
       // Organization edits are admin-only on the backend; other roles would get a 403.
       // The optional steps below must never block completing onboarding.
       if (isAdmin) {
@@ -432,27 +455,9 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 }));
 
 async function finishOnboarding(_set: (partial: Partial<AuthStore>) => void) {
-  const priorCompleted = useAuthStore.getState().user?.hasCompletedOnboarding === true;
-
-  // Optimistic: unblock AppShell immediately so skip/complete cannot soft-lock the user.
-  useAuthStore.setState((state) =>
-    state.user && !state.user.hasCompletedOnboarding
-      ? { user: { ...state.user, hasCompletedOnboarding: true } }
-      : state,
-  );
-
-  try {
-    await api.post('/auth/onboarding/complete');
-  } catch (err) {
-    if (!priorCompleted) {
-      useAuthStore.setState((state) =>
-        state.user
-          ? { user: { ...state.user, hasCompletedOnboarding: false } }
-          : state,
-      );
-    }
-    throw err;
-  }
+  // The flag is only set after the server confirms, so a failure leaves the user on
+  // /onboarding with a retry instead of flipping state back and forth.
+  await api.post('/auth/onboarding/complete');
 
   // Authoritative after a successful complete — never accept a stale false from /me.
   useAuthStore.setState((state) =>

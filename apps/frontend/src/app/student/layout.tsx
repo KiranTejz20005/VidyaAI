@@ -3,6 +3,7 @@
 import { useEffect } from 'react';
 import { useAuthStore } from '@/store/auth.store';
 import { useRouter } from 'next/navigation';
+import { getMisroutedRedirect } from '@/utils/navigation';
 
 export default function StudentLayout({ children }: { children: React.ReactNode }) {
   const { user, isAuthenticated, isLoading } = useAuthStore();
@@ -15,7 +16,10 @@ export default function StudentLayout({ children }: { children: React.ReactNode 
       return;
     }
     if (user?.role?.toUpperCase() !== 'STUDENT') {
-      router.push('/dashboard');
+      // Go straight to the user's own home; null (unknown role) stays on Access Denied
+      // instead of bouncing /student -> /dashboard -> /student forever.
+      const target = getMisroutedRedirect(user?.role, '/student');
+      if (target) router.replace(target);
     }
   }, [user, isAuthenticated, isLoading, router]);
 

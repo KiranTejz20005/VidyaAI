@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import { normalizeRole } from '@/utils/navigation';
 import {
   Search,
   FileText,
@@ -58,24 +59,26 @@ export function CommandPalette() {
     router.push(path);
   };
 
+  const role = normalizeRole(user?.role);
   const actions =
-    user?.role === 'ADMIN'
+    role === 'ADMIN' || role === 'SUPER_ADMIN'
       ? [
-          { title: 'SaaS Control Plane', path: '/dashboard/superadmin', category: 'Admin', icon: Building },
+          ...(role === 'SUPER_ADMIN'
+            // Phase 3: canonical /super-admin (not legacy /dashboard/*); hide student /research.
+            ? [{ title: 'SaaS Control Plane', path: '/super-admin', category: 'Admin', icon: Building }]
+            : []),
           { title: 'White-Label Branding', path: '/admin/branding', category: 'Settings', icon: Settings },
           { title: 'AI Control Center (MCP)', path: '/admin/ai/control-center', category: 'AI', icon: Network },
           { title: 'Multi-Agent Workflow Designer', path: '/admin/ai/workflow-designer', category: 'AI', icon: Network },
           { title: 'AI Swarm Observability', path: '/admin/ai/agent-monitor', category: 'AI', icon: Activity },
           { title: 'Integration Center', path: '/admin/integrations', category: 'System', icon: Settings },
-          { title: 'Digital Library & Research', path: '/research', category: 'Academics', icon: BookOpen },
           { title: 'Institutional Research Analytics', path: '/admin/research', category: 'Analytics', icon: Building },
           { title: 'AI Orchestrator Analytics', path: '/admin/ai', category: 'AI', icon: Cpu },
           { title: 'Institution OBE Dashboard', path: '/admin/obe', category: 'Management', icon: Building },
         ]
-      : user?.role === 'TEACHER'
+      : role === 'TEACHER'
       ? [
-          { title: 'Digital Library & Research', path: '/research', category: 'Academics', icon: BookOpen },
-          { title: 'Research Supervisor Dashboard', path: '/dashboard/supervisor', category: 'Research', icon: Users },
+          { title: 'Teacher Library', path: '/teacher/library', category: 'Academics', icon: BookOpen },
           { title: 'Outcome-Based Education (OBE)', path: '/teacher/obe', category: 'Academics', icon: Calculator },
           { title: 'Create Quiz', path: '/teacher/generate-quiz', category: 'AI Toolkit', icon: FileText },
           { title: 'Assignments Management', path: '/assignments', category: 'Academics', icon: FileText },
@@ -87,7 +90,6 @@ export function CommandPalette() {
           { title: 'Dashboard', path: '/student', category: 'Navigation', icon: BookOpen },
           { title: 'Tests & Exams', path: '/student/assessments', category: 'Academics', icon: FileText },
           { title: 'Results & Analytics', path: '/student/results', category: 'Analytics', icon: Activity },
-          { title: 'Digital Library & Research', path: '/research', category: 'Academics', icon: BookOpen },
           { title: 'Course Discussions', path: '/student/community/discussions', category: 'Community', icon: MessageSquare },
           { title: 'Ask AI Tutor', path: '/student/tutor', category: 'AI Tools', icon: BookOpen },
           { title: 'Settings', path: '/settings', category: 'Preferences', icon: Settings },

@@ -3,6 +3,7 @@
 import { useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAuthStore } from '@/store/auth.store';
+import { getDashboardRoute, isOnboarded } from '@/utils/navigation';
 import { createClient } from '@/lib/supabase/client';
 
 function CallbackHandler() {
@@ -19,15 +20,11 @@ function CallbackHandler() {
         if (session?.user) {
           await useAuthStore.getState().initialize();
           const user = useAuthStore.getState().user;
-          const isOnboarded =
-            user?.hasCompletedOnboarding === true ||
-            !!(user?.organizationId && user?.departmentId);
-          let dashboardPath = '/dashboard/student';
-          if (user?.role === 'TEACHER' || user?.role === 'FACULTY')
-            dashboardPath = '/dashboard/faculty';
-          if (user?.role === 'ADMIN' || user?.role === 'SUPER_ADMIN')
-            dashboardPath = '/dashboard/admin';
-          window.location.href = isOnboarded ? dashboardPath : '/onboarding';
+          if (!user) {
+            window.location.href = '/login?error=session_unavailable';
+            return;
+          }
+          window.location.href = isOnboarded(user) ? getDashboardRoute(user.role) : '/onboarding';
           return;
         }
       } catch (e) {
@@ -53,17 +50,15 @@ function CallbackHandler() {
             const data = await res.json();
             if (data && data.email) {
               email = data.email;
-              firstName = data.given_name || 'Google';
-              lastName = data.family_name || 'User';
+              firstName = data.given_name || '';
+              lastName = data.family_name || '';
             }
           }
         } else if (provider === 'x') {
           const code = searchParams.get('code');
           if (code) {
+            // X does not return an email on this flow; without one we cannot sign in.
             token = code;
-            email = 'x-user@vidyaai.com';
-            firstName = 'X';
-            lastName = 'User';
           }
         }
       } catch (err) {
@@ -97,15 +92,11 @@ function CallbackHandler() {
             });
             if (result.success) {
               const user = useAuthStore.getState().user;
-              const isOnboarded =
-                user?.hasCompletedOnboarding === true ||
-                !!(user?.organizationId && user?.departmentId);
-              let dashboardPath = '/dashboard/student';
-              if (user?.role === 'TEACHER' || user?.role === 'FACULTY')
-                dashboardPath = '/dashboard/faculty';
-              if (user?.role === 'ADMIN' || user?.role === 'SUPER_ADMIN')
-                dashboardPath = '/dashboard/admin';
-              window.location.href = isOnboarded ? dashboardPath : '/onboarding';
+              if (!user) {
+                window.location.href = '/login?error=session_unavailable';
+                return;
+              }
+              window.location.href = isOnboarded(user) ? getDashboardRoute(user.role) : '/onboarding';
             } else {
               window.location.href = '/login?error=sso_failed';
             }
