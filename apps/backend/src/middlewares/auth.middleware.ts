@@ -1,6 +1,11 @@
 import { Request, Response, NextFunction } from 'express';
 import { verifyAccessToken } from '../services/auth.service';
 import { logger } from '../utils/logger';
+import prisma from '../config/prisma';
+import { normalizeRole, NO_ORGANIZATION_ID } from '../security/request-context';
+
+export { NO_ORGANIZATION_ID };
+import { isActiveUserStatus } from '../security/account-status';
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -26,15 +31,15 @@ declare global {
   }
 }
 
-/**
- * Sentinel organization for accounts without one. It never matches a real
- * tenant, so `where: { organizationId }` filters stay restrictive instead of
- * collapsing to `undefined` (which Prisma treats as "no filter").
- */
-export const NO_ORGANIZATION_ID = '00000000-0000-0000-0000-000000000000';
 
 /** Endpoints usable while a temporary password is still in force. */
-const PASSWORD_RESET_ALLOWED_PATHS = ['/auth/me', '/auth/me/password', '/auth/logout', '/auth/refresh'];
+const PASSWORD_RESET_ALLOWED_PATHS = new Set([
+  '/api/v1/auth/me',
+  '/api/v1/auth/me/password',
+  '/api/v1/auth/logout',
+  '/api/v1/auth/refresh',
+  '/api/v1/admin/users/self/reset-password-force',
+]);
 
 function extractBearerToken(req: Request): string | undefined {
   const authHeader = req.headers.authorization;
@@ -50,33 +55,15 @@ function extractBearerToken(req: Request): string | undefined {
  * `access_token` cookie. Tokens are deliberately not accepted from the query
  * string: URLs end up in access logs, browser history and Referer headers.
  */
-export const authenticate = (req: Request, res: Response, next: NextFunction) => {
+export const authenticate = async (req: Request, res: Response, next: NextFunction) => {
   const token = extractBearerToken(req);
   if (!token) {
     return res.status(401).json({ success: false, error: 'Authentication required', code: 'UNAUTHORIZED' });
   }
 
+  let decodedPayload: ReturnType<typeof verifyAccessToken>;
   try {
-    const decodedPayload = verifyAccessToken(token);
-    req.user = {
-      id: decodedPayload.userId,
-      email: decodedPayload.email,
-      role: decodedPayload.role,
-      organizationId: decodedPayload.organizationId || NO_ORGANIZATION_ID,
-      activeOrganizationId: decodedPayload.activeOrganizationId,
-      departmentId: decodedPayload.departmentId,
-    };
-    if (decodedPayload.forcePasswordReset) {
-      const path = req.originalUrl.split('?')[0];
-      if (!PASSWORD_RESET_ALLOWED_PATHS.some((p) => path.endsWith(p))) {
-        return res.status(403).json({
-          success: false,
-          error: 'You must set a new password before continuing',
-          code: 'PASSWORD_RESET_REQUIRED',
-        });
-      }
-    }
-    return next();
+    decodedPayload = verifyAccessToken(token);
   } catch (err) {
     const expired = err instanceof Error && err.message === 'Access token has expired';
     return res.status(401).json({
@@ -85,6 +72,59 @@ export const authenticate = (req: Request, res: Response, next: NextFunction) =>
       code: expired ? 'TOKEN_EXPIRED' : 'UNAUTHORIZED',
     });
   }
+
+  // The JWT is only proof of a past login: re-check the account so deactivated
+  // or deleted users lose access immediately and role/org changes apply at once.
+  let dbUser: {
+    id: string;
+    role: string;
+    status: string;
+    organizationId: string | null;
+    forcePasswordReset: boolean;
+  } | null;
+  try {
+    dbUser = await prisma.user.findUnique({
+      where: { id: decodedPayload.userId },
+      select: { id: true, role: true, status: true, organizationId: true, forcePasswordReset: true },
+    });
+  } catch (err) {
+    logger.error({ err }, '[Authenticate] User status lookup failed');
+    return res.status(503).json({ success: false, error: 'Unable to verify account', code: 'AUTH_UNAVAILABLE' });
+  }
+  if (!dbUser || !isActiveUserStatus(dbUser.status)) {
+    return res.status(401).json({ success: false, error: 'Account is inactive', code: 'UNAUTHORIZED' });
+  }
+
+  const dbOrgId = dbUser.organizationId || NO_ORGANIZATION_ID;
+  const isSuper = normalizeRole(dbUser.role) === 'SUPER_ADMIN';
+  // Only a SUPER_ADMIN may act on an organization other than their own (their
+  // token's selection is kept). Everyone else is pinned to the DB organization;
+  // /auth/me/switch-organization only lets non-super users pick their own org,
+  // so a differing token claim is stale or forged and is ignored.
+  const activeOrganizationId = isSuper
+    ? (decodedPayload.activeOrganizationId ?? undefined)
+    : (dbUser.organizationId ?? undefined);
+  req.user = {
+    id: decodedPayload.userId,
+    email: decodedPayload.email,
+    role: dbUser.role,
+    organizationId: dbOrgId,
+    activeOrganizationId,
+    departmentId: decodedPayload.departmentId,
+  };
+  // DB is source of truth: clearing forcePasswordReset must unblock immediately
+  // even if an older access token still carries the `pwr` claim.
+  if (dbUser.forcePasswordReset) {
+    const path = req.originalUrl.split('?')[0].replace(/\/+$/, '');
+    if (!PASSWORD_RESET_ALLOWED_PATHS.has(path)) {
+      return res.status(403).json({
+        success: false,
+        error: 'You must set a new password before continuing',
+        code: 'PASSWORD_RESET_REQUIRED',
+      });
+    }
+  }
+  return next();
 };
 
 /**
@@ -111,7 +151,8 @@ export const requireOwnership = (_resourceType: string) => {
       return res.status(401).json({ success: false, code: 'UNAUTHORIZED', message: 'Unauthorized' });
     }
 
-    if (req.user.role === 'SUPER_ADMIN' || req.user.role === 'ADMIN') {
+    const ownerRole = normalizeRole(req.user.role);
+    if (ownerRole === 'SUPER_ADMIN' || ownerRole === 'ADMIN') {
       return next();
     }
 
@@ -155,20 +196,13 @@ export const authorize = (allowedRoles: string[]) => {
     if (!req.user) {
       return res.status(401).json({ success: false, error: 'Unauthorized' });
     }
-    let role = req.user.role.toUpperCase();
-    if (role === 'ORG_ADMIN') role = 'ADMIN';
-    if (role === 'FACULTY') role = 'TEACHER';
+    const role = normalizeRole(req.user.role);
 
     if (role === 'SUPER_ADMIN') {
       return next();
     }
 
-    const normalizedAllowedRoles = allowedRoles.map(r => {
-      let norm = r.toUpperCase();
-      if (norm === 'ORG_ADMIN') norm = 'ADMIN';
-      if (norm === 'FACULTY') norm = 'TEACHER';
-      return norm;
-    });
+    const normalizedAllowedRoles = allowedRoles.map(normalizeRole);
 
     if (normalizedAllowedRoles.includes(role)) {
       return next();

@@ -58,7 +58,8 @@ export const updatePreferencesSchema = z.object({
 
 export const changePasswordSchema = z.object({
   body: z.object({
-    currentPassword: z.string().min(1, 'Current password is required').max(128),
+    // Optional when the account is under forced reset (temp password / first login).
+    currentPassword: z.string().min(1).max(128).optional(),
     newPassword: strongPassword,
   }),
 });
@@ -102,5 +103,13 @@ export const resetPasswordSchema = z.object({
   body: z.object({
     token: z.string().min(32).max(256),
     newPassword: strongPassword,
+  }),
+});
+
+export const updateOrganizationSchema = z.object({
+  body: z.object({
+    organizationName: z.string().trim().min(1).max(120).optional(),
+    department: z.string().trim().min(1).max(120).optional(),
+    academicYear: z.string().trim().max(20).optional(),
   }),
 });

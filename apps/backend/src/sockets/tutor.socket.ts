@@ -94,9 +94,7 @@ export function registerTutorSocketHandlers(socket: TutorSocket): void {
         } else if (event.type === 'token') {
           socket.emit('tutor:chunk', { requestId, token: event.token, index: chunkIndex++ });
         } else if (event.type === 'done') {
-          if (userId !== 'demo-faculty-id') {
-            await StreakService.recordActivity(userId);
-          }
+          await StreakService.recordActivity(userId);
           socket.emit('tutor:done', {
             requestId,
             messageId: event.result.messageId,

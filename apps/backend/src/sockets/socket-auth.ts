@@ -1,6 +1,7 @@
 import type { Socket } from 'socket.io';
 import prisma from '../config/prisma';
 import { verifyAccessToken } from '../services/auth.service';
+import { isActiveUserStatus } from '../security/account-status';
 import { logger } from '../utils/logger';
 import type { SocketUser } from '../types/socket.types';
 
@@ -55,11 +56,15 @@ export async function resolveSocketUser(socket: Pick<Socket, 'handshake'>): Prom
   }
   if (!payload?.userId) return null;
 
+  // Called by createSocketAuthMiddleware (socket.server.ts). Sole socket identity loader.
+  // Reads User.status + forcePasswordReset; user asked to fix PASSWORD_RESET_REQUIRED 403s.
   const user = await prisma.user.findUnique({
     where: { id: payload.userId },
-    select: { id: true, role: true, organizationId: true, status: true },
+    select: { id: true, role: true, organizationId: true, status: true, forcePasswordReset: true },
   });
-  if (!user || user.status !== 'ACTIVE') return null;
+  if (!user || !isActiveUserStatus(user.status)) return null;
+  // Match HTTP authenticate: blocked until forced password change completes.
+  if (user.forcePasswordReset) return null;
 
   const role = String(user.role);
   // A SUPER_ADMIN acts on the organization selected in their token; everyone

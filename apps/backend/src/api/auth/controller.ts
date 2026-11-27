@@ -1,12 +1,15 @@
 import { Request, Response } from 'express';
 import prisma from '../../config/prisma';
-import { getRedisClient } from '../../config/redis';
+import { isLoginLocked, lockKeys, recordFailedLogin, clearFailedLogins } from './lockout';
+import { Prisma } from '@prisma/client';
 import { logger as baseLogger } from '../../utils/logger';
 import { AuditService } from '../../services/audit.service';
 import {
   AuthError,
   assertUserCanAuthenticate,
   createPasswordResetToken,
+  createUserWithPersonalOrganization,
+  ensurePersonalOrganization,
   getSessionIdForRefreshToken,
   hashPassword,
   issueAccessTokenForUser,
@@ -36,6 +39,7 @@ import {
   googleSigninSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
+  updateOrganizationSchema,
 } from './validators';
 import {
   serializeAuthTokens,
@@ -50,9 +54,6 @@ const REFRESH_COOKIE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const ORG_STORAGE_LIMIT_BYTES = 100 * 1024 * 1024;
 const PASSWORD_RESET_EXPIRY_MINUTES = 30;
 
-const LOGIN_MAX_ATTEMPTS_PER_IP = 5;
-const LOGIN_MAX_ATTEMPTS_PER_ACCOUNT = 25;
-const LOGIN_LOCK_SECONDS = 15 * 60;
 
 /** Roles a person may choose for themselves when creating an account. */
 const SELF_SERVICE_ROLES = new Set(['STUDENT', 'TEACHER']);
@@ -136,23 +137,37 @@ export const signup = async (req: Request, res: Response): Promise<void> => {
     const { email, password, firstName, lastName, role } = body;
     const { ipAddress, userAgent } = clientMeta(req);
 
+    // Hash before the lookup so a duplicate email costs the same time as a new one.
+    const passwordHash = await hashPassword(password);
     const existingUser = await prisma.user.findUnique({ where: { email }, select: { id: true } });
     if (existingUser) {
-      sendConflict(res, 'Registration failed. Please check your details and try again.');
+      // Anti-enumeration: same status/message shape as success; no session issued.
+      log(req).info({ email }, '[auth:signup] duplicate email suppressed');
+      sendCreated(res, { accessToken: null, user: null }, 'Account created successfully');
       return;
     }
 
-    const user = await prisma.user.create({
-      data: {
+    // Role comes from the closed self-service set only; the user and an isolated
+    // personal workspace are created atomically. Never attaches to an existing org.
+    let user;
+    try {
+      user = await createUserWithPersonalOrganization({
         email,
-        passwordHash: await hashPassword(password),
+        passwordHash,
         firstName,
         lastName,
         role: role === 'STUDENT' ? 'STUDENT' : 'TEACHER',
         emailVerified: false,
         hasCompletedOnboarding: false,
-      },
-    });
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        log(req).info({ email }, '[auth:signup] unique race suppressed');
+        sendCreated(res, { accessToken: null, user: null }, 'Account created successfully');
+        return;
+      }
+      throw err;
+    }
 
     await prisma.loginHistory.create({ data: { userId: user.id, ipAddress, userAgent, status: 'SIGNUP_SUCCESS' } }).catch(() => undefined);
     await AuditService.logAuditEvent({
@@ -166,57 +181,13 @@ export const signup = async (req: Request, res: Response): Promise<void> => {
   }
 };
 
-async function isLoginLocked(keys: string[]): Promise<boolean> {
-  try {
-    const redis = getRedisClient();
-    const values = await Promise.all(keys.map((k) => redis.get(k)));
-    return values.some(Boolean);
-  } catch (err) {
-    baseLogger.warn({ err }, '[auth:login] Lockout store unavailable; continuing without lockout check');
-    return false;
-  }
-}
-
-async function recordFailedLogin(email: string, ipAddress: string): Promise<void> {
-  try {
-    const redis = getRedisClient();
-    const counters: Array<[string, string, number]> = [
-      [`login:attempts:${email}:${ipAddress}`, `login:locked:${email}:${ipAddress}`, LOGIN_MAX_ATTEMPTS_PER_IP],
-      [`login:attempts:${email}`, `login:locked:${email}`, LOGIN_MAX_ATTEMPTS_PER_ACCOUNT],
-    ];
-    for (const [counterKey, lockKey, max] of counters) {
-      const attempts = await redis.incr(counterKey);
-      if (attempts === 1) await redis.expire(counterKey, LOGIN_LOCK_SECONDS);
-      if (attempts >= max) {
-        await redis.set(lockKey, '1', 'EX', LOGIN_LOCK_SECONDS);
-        await redis.del(counterKey);
-      }
-    }
-  } catch (err) {
-    baseLogger.warn({ err }, '[auth:login] Could not record failed attempt');
-  }
-}
-
-async function clearFailedLogins(email: string, ipAddress: string): Promise<void> {
-  try {
-    const redis = getRedisClient();
-    await Promise.all([
-      redis.del(`login:attempts:${email}:${ipAddress}`),
-      redis.del(`login:locked:${email}:${ipAddress}`),
-      redis.del(`login:attempts:${email}`),
-    ]);
-  } catch {
-    // Best effort; counters expire on their own.
-  }
-}
-
 export const login = async (req: Request, res: Response): Promise<void> => {
   try {
     const { body } = loginSchema.parse({ body: req.body });
     const { email, password } = body;
     const { ipAddress, userAgent } = clientMeta(req);
 
-    if (await isLoginLocked([`login:locked:${email}:${ipAddress}`, `login:locked:${email}`])) {
+    if (await isLoginLocked(lockKeys(email, ipAddress))) {
       sendError(res, { error: 'Too many failed login attempts. Try again in 15 minutes.', code: 'RATE_LIMITED', statusCode: 429 });
       return;
     }
@@ -243,17 +214,17 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     }
 
     // Account state is only revealed to someone who proved the password.
-    // Account state is only revealed to someone who proved the password.
     await assertUserCanAuthenticate(user);
     await clearFailedLogins(email, ipAddress);
+    const sessionUser = (await ensurePersonalOrganization(user)).user;
 
     await prisma.loginHistory.create({ data: { userId: user.id, ipAddress, userAgent, status: 'SUCCESS' } }).catch(() => undefined);
     await AuditService.logAuditEvent({
       action: 'LOGIN_SUCCESS', userId: user.id, organizationId: user.organizationId || undefined, ipAddress, userAgent,
     });
 
-    const accessToken = await establishSession(req, res, user);
-    sendSuccess(res, { data: serializeAuthTokens(accessToken, user), message: 'Login successful' });
+    const accessToken = await establishSession(req, res, sessionUser);
+    sendSuccess(res, { data: serializeAuthTokens(accessToken, sessionUser), message: 'Login successful' });
   } catch (error) {
     respondAuthFailure(req, res, error, 'login', 'Authentication failed');
   }
@@ -339,6 +310,8 @@ export const acceptInvite = async (req: Request, res: Response): Promise<void> =
           role: invitation.role,
           organizationId: invitation.organizationId,
           activeOrganizationId: invitation.organizationId,
+          // The invitation token was delivered to this address, so ownership is proven.
+          emailVerified: true,
           hasCompletedOnboarding: false,
         },
       });
@@ -372,14 +345,33 @@ export const googleSignin = async (req: Request, res: Response): Promise<void> =
     let user = await prisma.user.findUnique({ where: { email: identity.email } });
 
     if (user) {
-      // Role is bound to the account — never accept a client-selected role on login.
+      // Role is bound to the account - never accept a client-selected role on login.
       await assertUserCanAuthenticate(user);
-      const updateData: { authProvider?: string; avatar?: string } = {};
+      const updateData: { authProvider?: string; avatar?: string; emailVerified?: boolean; passwordHash?: null } = {};
+      let wipedUnverifiedPassword = false;
       if (user.authProvider === 'LOCAL') updateData.authProvider = 'GOOGLE';
+      if (!user.emailVerified) {
+        // Google just proved control of this address. A password set while the address
+        // was still unverified may belong to someone who pre-registered it (account
+        // pre-hijacking), so it is discarded; the owner can set one via password reset.
+        updateData.emailVerified = true;
+        if (user.passwordHash) {
+          updateData.passwordHash = null;
+          wipedUnverifiedPassword = true;
+        }
+      }
       if (identity.picture && !user.avatar) updateData.avatar = identity.picture;
       if (Object.keys(updateData).length > 0) {
         user = await prisma.user.update({ where: { id: user.id }, data: updateData });
       }
+      if (wipedUnverifiedPassword) {
+        await revokeAllUserSessions(user.id);
+        await AuditService.logAuditEvent({
+          action: 'GOOGLE_ACCOUNT_LINKED', userId: user.id, entity: 'User', entityId: user.id, ipAddress, userAgent,
+          metadata: { unverifiedPasswordRemoved: true },
+        });
+      }
+      user = (await ensurePersonalOrganization(user)).user;
     } else {
       if (!body.isSignUp) {
         sendError(res, { error: 'Account not found. Please sign up first.', code: 'ACCOUNT_NOT_FOUND', statusCode: 404 });
@@ -389,8 +381,8 @@ export const googleSignin = async (req: Request, res: Response): Promise<void> =
         sendForbidden(res, 'Administrator accounts are created by invitation only.');
         return;
       }
-      user = await prisma.user.create({
-        data: {
+      try {
+        user = await createUserWithPersonalOrganization({
           email: identity.email,
           authProvider: 'GOOGLE',
           firstName: (identity.givenName || 'New').slice(0, 100),
@@ -399,8 +391,14 @@ export const googleSignin = async (req: Request, res: Response): Promise<void> =
           role: requestedRole as 'STUDENT' | 'TEACHER',
           emailVerified: true,
           hasCompletedOnboarding: false,
-        },
-      });
+        });
+      } catch (err) {
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+          sendError(res, { error: 'Google authentication failed', statusCode: 409 });
+          return;
+        }
+        throw err;
+      }
       await AuditService.logAuditEvent({
         action: 'SIGNUP_SUCCESS', userId: user.id, entity: 'User', entityId: user.id, ipAddress, userAgent,
         metadata: { provider: 'GOOGLE' },
@@ -459,19 +457,13 @@ export const resetPassword = async (req: Request, res: Response): Promise<void> 
 // Current user
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const getPublicOrganizations = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const orgs = await prisma.organization.findMany({
-      where: { status: 'ACTIVE' },
-      orderBy: { name: 'asc' },
-      select: { id: true, name: true, code: true },
-      take: 500,
-    });
-    sendSuccess(res, { data: orgs });
-  } catch (error) {
-    log(req).error({ err: error }, '[auth:getPublicOrganizations]');
-    sendError(res, { error: 'Failed to fetch public organizations', statusCode: 500 });
-  }
+/**
+ * Unauthenticated. The client only calls this to receive the CSRF cookie, and
+ * self-service signup never joins an existing organization (that requires an
+ * invitation), so no tenant data is exposed: always an empty list.
+ */
+export const getPublicOrganizations = async (_req: Request, res: Response): Promise<void> => {
+  sendSuccess(res, { data: [] });
 };
 
 export const getMe = async (req: Request, res: Response): Promise<void> => {
@@ -571,12 +563,23 @@ export const changePassword = async (req: Request, res: Response): Promise<void>
       sendBadRequest(res, 'This account uses Google Sign-In, so it has no password to change.');
       return;
     }
-    if (!(await verifyPassword(body.currentPassword, user.passwordHash))) {
-      sendBadRequest(res, 'Incorrect current password');
-      return;
-    }
-    if (body.currentPassword === body.newPassword) {
-      sendBadRequest(res, 'Choose a password different from your current one.');
+
+    const forced = user.forcePasswordReset === true;
+    if (!forced) {
+      if (!body.currentPassword) {
+        sendBadRequest(res, 'Current password is required');
+        return;
+      }
+      if (!(await verifyPassword(body.currentPassword, user.passwordHash))) {
+        sendBadRequest(res, 'Incorrect current password');
+        return;
+      }
+      if (body.currentPassword === body.newPassword) {
+        sendBadRequest(res, 'Choose a password different from your current one.');
+        return;
+      }
+    } else if (await verifyPassword(body.newPassword, user.passwordHash)) {
+      sendBadRequest(res, 'Choose a password different from your temporary one.');
       return;
     }
 
@@ -719,15 +722,63 @@ export const getStorageUsage = async (req: Request, res: Response): Promise<void
 
 export const completeOnboarding = async (req: Request, res: Response): Promise<void> => {
   try {
-    const user = await prisma.user.update({
+    const updated = await prisma.user.update({
       where: { id: getRequestUserId(req) },
       data: { hasCompletedOnboarding: true, onboardingCompletedAt: new Date() },
     });
+    const { user, created } = await ensurePersonalOrganization(updated);
     sendSuccess(res, {
-      data: { hasCompletedOnboarding: user.hasCompletedOnboarding },
+      data: {
+        hasCompletedOnboarding: user.hasCompletedOnboarding,
+        // The JWT carries the organization id, so hand back a fresh token when one was just created.
+        ...(created ? { accessToken: issueAccessTokenForUser(user) } : {}),
+      },
       message: 'Onboarding completed successfully',
     });
   } catch (error) {
     respondAuthFailure(req, res, error, 'completeOnboarding', 'Failed to complete onboarding');
+  }
+};
+
+/** Admin-only (see routes): rename the caller's own organization and/or set their department. */
+export const updateOrganization = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { body } = updateOrganizationSchema.parse({ body: req.body });
+    const userId = getRequestUserId(req);
+    const current = await prisma.user.findUnique({ where: { id: userId } });
+    if (!current) {
+      sendNotFound(res, 'User not found');
+      return;
+    }
+
+    let user = current;
+    if (body.organizationName) {
+      if (!user.organizationId) {
+        user = (await ensurePersonalOrganization(user)).user as typeof current;
+      }
+      if (user.organizationId) {
+        await prisma.organization.update({ where: { id: user.organizationId }, data: { name: body.organizationName } });
+      }
+    }
+
+    if (body.department && user.organizationId) {
+      const existing = await prisma.department.findFirst({
+        where: { name: body.department, organizationId: user.organizationId },
+      });
+      const dept = existing ?? (await prisma.department.create({ data: { name: body.department, organizationId: user.organizationId } }));
+      user = await prisma.user.update({ where: { id: userId }, data: { departmentId: dept.id } });
+    }
+
+    sendSuccess(res, {
+      data: {
+        organizationName: body.organizationName,
+        department: body.department,
+        academicYear: body.academicYear,
+        accessToken: issueAccessTokenForUser(user),
+      },
+      message: 'Organization settings updated',
+    });
+  } catch (error) {
+    respondAuthFailure(req, res, error, 'updateOrganization', 'Failed to update organization');
   }
 };

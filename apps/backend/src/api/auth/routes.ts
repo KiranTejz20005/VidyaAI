@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
+import { ResilientRedisStore } from './resilient-store';
 import { asyncHandler } from '../../utils/async-handler';
-import { authenticate } from '../../middlewares/auth.middleware';
+import { authenticate, authorize } from '../../middlewares/auth.middleware';
 import { validate } from '../../middlewares/validate.middleware';
 import {
   signupSchema,
@@ -14,6 +15,7 @@ import {
   googleSigninSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
+  updateOrganizationSchema,
 } from './validators';
 import {
   signup,
@@ -36,20 +38,23 @@ import {
   googleSignin,
   forgotPassword,
   resetPassword,
+  updateOrganization,
 } from './controller';
 
 const router = Router();
 
-const limiter = (windowMs: number, max: number, error: string) =>
-  rateLimit({ windowMs, max, standardHeaders: true, legacyHeaders: false, message: { success: false, error, code: 'RATE_LIMITED' } });
+const limiter = (name: string, windowMs: number, max: number, error: string) =>
+  rateLimit({ windowMs, max, store: new ResilientRedisStore(name), standardHeaders: true, legacyHeaders: false, message: { success: false, error, code: 'RATE_LIMITED' } });
 
 // Per-IP ceilings sized for many users behind one school NAT. Credential
 // guessing is throttled per account in the login handler itself.
-const authLimiter = limiter(15 * 60 * 1000, 20, 'Too many authentication attempts. Please try again later.');
-const refreshLimiter = limiter(60 * 1000, 5, 'Too many refresh attempts. Please try again later.');
-const recoveryLimiter = limiter(60 * 60 * 1000, 10, 'Too many password reset requests. Please try again later.');
+const authLimiter = limiter('auth', 15 * 60 * 1000, 20, 'Too many authentication attempts. Please try again later.');
+const refreshLimiter = limiter('refresh', 60 * 1000, 5, 'Too many refresh attempts. Please try again later.');
+const recoveryLimiter = limiter('recovery', 60 * 60 * 1000, 10, 'Too many password reset requests. Please try again later.');
 
-router.get('/public-organizations', asyncHandler(getPublicOrganizations));
+const publicLimiter = limiter('public', 60 * 1000, 30, 'Too many requests. Please try again later.');
+
+router.get('/public-organizations', publicLimiter, asyncHandler(getPublicOrganizations));
 router.post('/signup', authLimiter, validate(signupSchema), asyncHandler(signup));
 router.post('/accept-invite', authLimiter, validate(acceptInviteSchema), asyncHandler(acceptInvite));
 router.post('/login', authLimiter, validate(loginSchema), asyncHandler(login));
@@ -72,5 +77,6 @@ router.post('/me/switch-organization', validate(switchOrganizationSchema), async
 router.get('/me/organizations', asyncHandler(getUserOrganizations));
 router.get('/me/storage', asyncHandler(getStorageUsage));
 router.post('/onboarding/complete', asyncHandler(completeOnboarding));
+router.put('/me/organization', authorize(['ADMIN']), validate(updateOrganizationSchema), asyncHandler(updateOrganization));
 
 export default router;
