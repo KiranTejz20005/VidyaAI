@@ -6,7 +6,7 @@ import {
   Loader2, ArrowLeft, Check, AlertCircle, Award, MessageSquare, Edit, ShieldCheck
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { apiClient } from '@/services/api.client';
+import { getEvaluationResult, overrideGrade } from '@/services/grading.service';
 
 interface CriteriaGrade {
   criteriaId: string;
@@ -51,8 +51,7 @@ export default function GradeReviewPage() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const evalRes = await apiClient.get<{ success: boolean; data: any }>(`/grader/submissions/${submissionId}/evaluate`);
-      const data = evalRes.data.data;
+      const data = (await getEvaluationResult(submissionId)) as unknown as Evaluation;
       setEvaluation(data);
 
       // Initialize manual grades
@@ -87,32 +86,21 @@ export default function GradeReviewPage() {
 
     const updatedCriteria = evaluation?.criteriaGrades.map(cg => ({
       ...cg,
+      criterionId: cg.criteriaId,
       score: manualGrades[cg.criteriaId] ?? cg.score
     })) || [];
 
     try {
-      await apiClient.patch(`/grader/submissions/${submissionId}/override`, {
-        overrideScore: finalScore,
+      await overrideGrade(submissionId, {
+        score: finalScore,
         reason: overrideReason || 'Manual teacher review and score adjustment.',
         teacherFeedback: teacherFeedback || overrideReason || 'Grade reviewed and confirmed by teacher.',
-        criteriaGrades: updatedCriteria,
+        criteriaGrades: updatedCriteria as unknown as Parameters<typeof overrideGrade>[1]['criteriaGrades'],
       });
       toast.success('Grades finalized and override saved');
       router.push('/grader');
     } catch {
-      // Fallback to POST if endpoint differs
-      try {
-        await apiClient.post(`/grader/submissions/${submissionId}/override`, {
-          overrideScore: finalScore,
-          reason: overrideReason || 'Manual teacher review and score adjustment.',
-          teacherFeedback: teacherFeedback || overrideReason || 'Grade reviewed and confirmed by teacher.',
-          criteriaGrades: updatedCriteria,
-        });
-        toast.success('Grades finalized and override saved');
-        router.push('/grader');
-      } catch {
-        toast.error('Failed to save grade override');
-      }
+      toast.error('Failed to save grade override');
     } finally {
       setSaving(false);
     }

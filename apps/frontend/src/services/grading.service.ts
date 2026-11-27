@@ -40,3 +40,33 @@ export async function getBulkEvaluateJobStatus(jobId: string): Promise<BulkEvalu
   const res = await api.get(`/grading/bulk-evaluate/${jobId}`);
   return res.data.data;
 }
+
+export async function uploadQuestionPaper(assignmentId: string, file: File): Promise<GradingConfig> {
+  const formData = new FormData();
+  formData.append('questionPaper', file);
+  const res = await api.post(`/grading/question-paper/${assignmentId}`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return res.data.data;
+}
+
+export interface UploadedSubmissionResult {
+  evaluated: boolean;
+  error?: string;
+  pendingReason?: string;
+}
+
+export async function uploadAnswerSheets(assignmentId: string, files: File[]): Promise<UploadedSubmissionResult[]> {
+  const formData = new FormData();
+  files.forEach((file) => formData.append('files', file));
+  const res = await api.post(`/grading/submissions/${assignmentId}`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return res.data.data;
+}
+
+/** Grading config for an assignment; resolves to null when none has been saved yet. */
+export async function getGradingConfigOrNull(assignmentId: string): Promise<GradingConfig | null> {
+  const res = await api.get(`/grading/config/${assignmentId}`);
+  return res.data.data ?? null;
+}

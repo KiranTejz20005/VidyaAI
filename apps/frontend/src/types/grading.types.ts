@@ -2,6 +2,8 @@ export interface GradingConfig {
   id: string;
   assignmentId: string;
   answerKeyText: string;
+  questionPaperName?: string;
+  autoEvaluate?: boolean;
   rubricId?: string;
   aiModel?: string;
   passingScore?: number;
@@ -14,11 +16,12 @@ export interface GradingConfig {
 
 export interface CreateGradingConfigData {
   answerKeyText: string;
-  rubricId?: string;
+  rubricId?: string | null;
+  autoEvaluate?: boolean;
   aiModel?: string;
   passingScore?: number;
   maxAttempts?: number;
-  gradingType: 'AUTO' | 'MANUAL' | 'HYBRID';
+  gradingType?: 'AUTO' | 'MANUAL' | 'HYBRID';
 }
 
 export interface Submission {
@@ -33,6 +36,7 @@ export interface Submission {
   evaluatedAt?: string;
   score?: number;
   totalMarks?: number;
+  evaluations?: Array<{ score: number; totalMarks?: number }>;
 }
 
 export interface CriteriaGrade {
@@ -53,11 +57,17 @@ export interface Evaluation {
   evaluatedAt: string;
   overriddenAt?: string;
   overrideReason?: string;
+  teacherFeedback?: string;
+  /** Staff-only: extracted student answer text. */
+  studentText?: string;
+  /** Staff-only: criteria of the rubric attached to the assignment. */
+  rubricCriteria?: Array<{ id: string; name: string; maxMarks: number }>;
 }
 
 export interface GradeOverrideData {
   score: number;
   reason: string;
+  teacherFeedback?: string;
   criteriaGrades?: CriteriaGrade[];
 }
 

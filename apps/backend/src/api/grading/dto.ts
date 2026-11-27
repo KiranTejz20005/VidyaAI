@@ -2,6 +2,8 @@ export interface GradingConfigDto {
   id: string;
   assignmentId: string;
   answerKeyText: string;
+  questionPaperName?: string;
+  autoEvaluate?: boolean;
   rubricId?: string;
   aiModel?: string;
   passingScore?: number;
@@ -42,6 +44,7 @@ export interface SubmissionDto {
   evaluatedAt?: string;
   score?: number;
   totalMarks?: number;
+  evaluations?: Array<{ score: number; totalMarks?: number }>;
 }
 
 export interface EvaluationDto {
@@ -53,6 +56,13 @@ export interface EvaluationDto {
   criteriaGrades: CriteriaGradeDto[];
   answerRegions?: any[];
   questions?: any[];
+  pages?: any[];
+  isOverridden?: boolean;
+  teacherOverride?: unknown;
+  submission?: { id: string; fileUrl: string; fileType: string };
+  teacherFeedback?: string;
+  studentText?: string;
+  rubricCriteria?: any[];
   evaluatedAt: string;
   overriddenAt?: string;
   overrideReason?: string;
@@ -64,11 +74,16 @@ export interface CriteriaGradeDto {
   score: number;
   maxScore: number;
   explanation: string;
+  /** @deprecated legacy alias of criterionId */
+  criteriaId?: string;
+  /** @deprecated legacy alias of criterionName */
+  name?: string;
 }
 
 export interface GradeOverrideDto {
   score: number;
   reason: string;
+  teacherFeedback?: string;
   criteriaGrades?: CriteriaGradeDto[];
 }
 

@@ -20,12 +20,13 @@ export const jobIdParamSchema = z.object({
 
 export const createGradingConfigSchema = z.object({
   body: z.object({
-    answerKeyText: z.string().min(1),
-    rubricId: z.string().uuid().optional(),
+    answerKeyText: z.string().default(''),
+    rubricId: z.string().uuid().nullable().optional(),
+    autoEvaluate: z.boolean().optional(),
     aiModel: z.string().optional(),
     passingScore: z.number().min(0).optional(),
     maxAttempts: z.number().int().min(1).optional(),
-    gradingType: z.enum(['AUTO', 'MANUAL', 'HYBRID']),
+    gradingType: z.enum(['AUTO', 'MANUAL', 'HYBRID']).optional(),
   }),
 });
 
@@ -53,6 +54,7 @@ export const gradeOverrideSchema = z.object({
   body: z.object({
     score: z.number().min(0),
     reason: z.string().min(1),
+    teacherFeedback: z.string().optional(),
     criteriaGrades: z
       .array(
         z.object({
@@ -61,7 +63,7 @@ export const gradeOverrideSchema = z.object({
           score: z.number().min(0),
           maxScore: z.number().min(0).optional(),
           explanation: z.string().optional(),
-        })
+        }).passthrough()
       )
       .optional(),
   }),

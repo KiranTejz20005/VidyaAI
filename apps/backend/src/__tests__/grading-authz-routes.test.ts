@@ -79,7 +79,7 @@ describe('grading routes — authz wiring', () => {
     expect(evaluationRoles).toEqual(['TEACHER', 'FACULTY', 'ADMIN', 'SUPER_ADMIN', 'STUDENT']);
 
     const routeLayers = gradingRouter.stack.filter((layer) => layer.route);
-    expect(routeLayers).toHaveLength(8);
+    expect(routeLayers).toHaveLength(10);
 
     const staffRoutesWithGradePermission = routeLayers.filter((layer) =>
       layer.route!.stack.some((mw) => mw.handle === gradePermissionMw),

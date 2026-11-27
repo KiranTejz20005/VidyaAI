@@ -1,10 +1,11 @@
+import path from 'path';
 import { Request, Response } from 'express';
 import { logger } from '../../utils/logger';
 import { sendSuccess, sendCreated, sendAccepted } from '../common/response';
 import { ApiError } from '../common/errors';
-import { parsePagination, buildPagination } from '../common/pagination';
+
 import { getRequestUserId, requireRequestOrgId, orgScope, isStudentRole } from '../../security/request-context';
-import { evaluateSubmission } from '../../services/grader.service';
+import { evaluateSubmission, extractTextFromFile } from '../../services/grader.service';
 import { AuditService } from '../../services/audit.service';
 import {
   assertCanGradeAssignment as assertCanGradeAssignmentRaw,
@@ -56,35 +57,16 @@ export const saveGradingConfig = async (req: Request, res: Response): Promise<vo
       if (!rubric) throw ApiError.notFound('Rubric not found');
     }
 
-    const existing = await prisma.assignmentGradingConfig.findUnique({ where: { assignmentId } });
-    let config: any;
-
-    if (existing) {
-      config = await (prisma as any).assignmentGradingConfig.update({
-        where: { assignmentId },
-        data: {
-          answerKeyText: req.body.answerKeyText,
-          rubricId: req.body.rubricId ?? null,
-          aiModel: req.body.aiModel ?? null,
-          passingScore: req.body.passingScore ?? null,
-          maxAttempts: req.body.maxAttempts ?? null,
-          gradingType: req.body.gradingType,
-        },
-      });
-    } else {
-      config = await (prisma as any).assignmentGradingConfig.create({
-        data: {
-          assignmentId,
-          answerKeyText: req.body.answerKeyText,
-          rubricId: req.body.rubricId ?? null,
-          aiModel: req.body.aiModel ?? null,
-          passingScore: req.body.passingScore ?? null,
-          maxAttempts: req.body.maxAttempts ?? null,
-          gradingType: req.body.gradingType,
-          status: 'ACTIVE',
-        },
-      });
-    }
+    const data = {
+      answerKeyText: req.body.answerKeyText ?? '',
+      rubricId: req.body.rubricId ?? null,
+      autoEvaluate: req.body.autoEvaluate !== false,
+    };
+    const config = await prisma.assignmentGradingConfig.upsert({
+      where: { assignmentId },
+      create: { assignmentId, ...data },
+      update: data,
+    });
 
     await AuditService.logAuditEvent({
       userId,
@@ -112,35 +94,54 @@ export const getGradingConfig = async (req: Request, res: Response): Promise<voi
     include: { rubric: { include: { criteria: true } } },
   });
 
-  if (!config) {
-    throw ApiError.notFound('Grading configuration not found for this assignment');
-  }
-
-  sendSuccess(res, { data: serializeGradingConfig(config) });
+  // Parity with legacy /grader: no config yet is a valid state, returned as null.
+  sendSuccess(res, { data: config ? serializeGradingConfig(config) : null });
 };
 
 export const listSubmissionsForGrading = async (req: Request, res: Response): Promise<void> => {
   const { assignmentId } = req.params;
-  const { page, limit, sort, order } = parsePagination(req);
 
   await assertCanGradeAssignment(req, assignmentId);
 
-  const where = { assignmentId };
-  const [submissions, total] = await Promise.all([
-    prisma.studentSubmission.findMany({
-      where,
-      include: { student: { select: { name: true } } } as any,
-      orderBy: { [sort]: order },
-      skip: (page - 1) * limit,
-      take: limit,
-    }),
-    prisma.studentSubmission.count({ where }),
-  ]);
-
-  sendSuccess(res, {
-    data: submissions.map(serializeSubmission),
-    pagination: buildPagination(page, limit, total),
+  // Parity with legacy /grader: all gradeable submissions, newest first, with evaluations and resolved student names.
+  const submissions = await prisma.studentSubmission.findMany({
+    where: { assignmentId, status: { in: ['SUBMITTED', 'UNDER_REVIEW', 'GRADED', 'RESULT_PUBLISHED'] } },
+    include: { evaluations: true },
+    orderBy: { submittedAt: 'desc' },
   });
+
+  const studentIds = Array.from(new Set(submissions.map((s) => s.studentId)));
+  const users = studentIds.length
+    ? await prisma.user.findMany({
+        where: { id: { in: studentIds } },
+        select: { id: true, firstName: true, lastName: true },
+      })
+    : [];
+  const userMap = new Map(users.map((u) => [u.id, u]));
+
+  const data = submissions.map((sub) => {
+    const user = userMap.get(sub.studentId);
+    const trimmed = typeof sub.fileUrl === 'string' ? sub.fileUrl.trim() : '';
+    let fileUrl = '';
+    if (trimmed) {
+      if (/^https?:\/\//i.test(trimmed)) {
+        fileUrl = trimmed;
+      } else {
+        const filename = path.basename(trimmed.replace(/\\/g, '/'));
+        fileUrl = filename ? `/uploads/${filename}` : trimmed;
+      }
+    }
+    const evaluation = sub.evaluations?.[0];
+    return {
+      ...serializeSubmission({ ...sub, fileUrl, createdAt: sub.submittedAt, student: undefined }),
+      studentName: user ? `${user.firstName} ${user.lastName}`.trim() : sub.studentId,
+      score: evaluation?.score,
+      totalMarks: evaluation?.totalMarks,
+      evaluations: sub.evaluations,
+    };
+  });
+
+  sendSuccess(res, { data });
 };
 
 export const evaluateSubmissionById = async (req: Request, res: Response): Promise<void> => {
@@ -181,12 +182,35 @@ export const getEvaluationResult = async (req: Request, res: Response): Promise<
     throw ApiError.notFound('Evaluation not found for this submission');
   }
 
-  sendSuccess(res, { data: serializeEvaluation(evaluation) });
+  const dto: Record<string, unknown> = { ...serializeEvaluation(evaluation) };
+  const rawRegions: any = (evaluation as any).answerRegions;
+  dto.pages = Array.isArray(rawRegions?.pages) ? rawRegions.pages : [];
+  dto.teacherFeedback = evaluation.teacherFeedback ?? undefined;
+  dto.isOverridden = evaluation.isOverridden;
+  dto.teacherOverride = evaluation.teacherOverride ?? undefined;
+  dto.submission = { id: submission.id, fileUrl: submission.fileUrl, fileType: submission.fileType };
+
+  if (!isStudentRole(req.user?.role)) {
+    // Staff-only extras that the legacy /grader evaluation payload exposed.
+    const config = await prisma.assignmentGradingConfig.findUnique({
+      where: { assignmentId: submission.assignmentId },
+      include: { rubric: { include: { criteria: true } } },
+    });
+    dto.rubricCriteria = config?.rubric?.criteria ?? [];
+    try {
+      dto.studentText = await extractTextFromFile(submission.fileUrl, submission.fileType);
+    } catch (err) {
+      logger.warn({ err }, '[getEvaluationResult] text extraction failed');
+      dto.studentText = '';
+    }
+  }
+
+  sendSuccess(res, { data: dto });
 };
 
 export const overrideGrade = async (req: Request, res: Response): Promise<void> => {
   const { submissionId } = req.params;
-  const { score, reason, criteriaGrades } = req.body;
+  const { score, reason, criteriaGrades, teacherFeedback } = req.body;
   const userId = getRequestUserId(req);
   const orgId = requireRequestOrgId(req);
 
@@ -223,7 +247,8 @@ export const overrideGrade = async (req: Request, res: Response): Promise<void> 
       submissionId,
       score,
       totalMarks: maxMarks,
-      generalFeedback: reason,
+      generalFeedback: teacherFeedback || reason,
+      teacherFeedback: teacherFeedback ?? null,
       criteriaGrades: criteriaGrades ?? [],
       isOverridden: true,
       overriddenBy: userId,
@@ -232,7 +257,8 @@ export const overrideGrade = async (req: Request, res: Response): Promise<void> 
     },
     update: {
       score,
-      generalFeedback: reason,
+      generalFeedback: teacherFeedback || reason,
+      ...(teacherFeedback !== undefined ? { teacherFeedback } : {}),
       criteriaGrades: criteriaGrades ?? undefined,
       isOverridden: true,
       overriddenBy: userId,
@@ -292,6 +318,8 @@ export const bulkEvaluate = async (req: Request, res: Response): Promise<void> =
     where: {
       assignmentId,
       organizationId: orgId,
+      // Unsubmitted attempts (server-side drafts / started-but-empty) have nothing to grade.
+      fileType: { notIn: ['DRAFT', 'NONE'] },
       ...(force
         ? { status: { not: 'ARCHIVED' } }
         : { status: { notIn: ['GRADED', 'RESULT_PUBLISHED', 'ARCHIVED'] } }),
