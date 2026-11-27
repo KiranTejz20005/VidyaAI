@@ -5,7 +5,7 @@ import { normalizeRole } from './request-context';
  * Restrict route to one or more system roles (FACULTY is treated as TEACHER).
  */
 export const requireRole = (...allowedRoles: string[]) => {
-  const normalizedAllowed = new Set(allowedRoles.map((r) => (r.toUpperCase() === 'FACULTY' ? 'TEACHER' : r.toUpperCase())));
+  const normalizedAllowed = new Set(allowedRoles.map((r) => normalizeRole(r)));
 
   return (req: Request, res: Response, next: NextFunction) => {
     if (!req.user) {

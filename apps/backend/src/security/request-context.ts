@@ -12,6 +12,18 @@ export function normalizeRole(role: string | undefined | null): string {
   return upper;
 }
 
+/**
+ * Sentinel organization the auth middleware assigns to accounts without one.
+ * It never matches a real tenant. This is the ONE place it is interpreted:
+ * `realOrgId` maps it to undefined, and every org helper goes through it.
+ */
+export const NO_ORGANIZATION_ID = '00000000-0000-0000-0000-000000000000';
+
+/** Returns the id, or undefined for missing/sentinel values. */
+export function realOrgId(id: string | null | undefined): string | undefined {
+  return id && id !== NO_ORGANIZATION_ID ? id : undefined;
+}
+
 export function getRequestUserId(req: Request): string {
   const userId = req.user?.id;
   if (!userId) throw new AuthError();
@@ -24,10 +36,10 @@ export function getRequestUserId(req: Request): string {
  * organization selected through /auth/me/switch-organization (if any).
  */
 export function getRequestOrgId(req: Request): string | undefined {
-  if (isSuperAdmin(req.user?.role)) {
-    return req.user?.activeOrganizationId || req.user?.organizationId || undefined;
-  }
-  return req.user?.organizationId || req.user?.activeOrganizationId || undefined;
+  const active = realOrgId(req.user?.activeOrganizationId);
+  const own = realOrgId(req.user?.organizationId);
+  if (isSuperAdmin(req.user?.role)) return active ?? own;
+  return own ?? active;
 }
 
 export function requireRequestOrgId(req: Request): string {
